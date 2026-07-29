@@ -2,7 +2,7 @@ using Avalonia;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Markup.Xaml;
 
-namespace AISpace.Launcher;
+namespace aisp.launch;
 
 public partial class App : Application
 {

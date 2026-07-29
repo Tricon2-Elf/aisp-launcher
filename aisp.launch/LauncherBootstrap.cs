@@ -1,7 +1,7 @@
 using Avalonia.Controls;
 using Avalonia.Platform;
 
-namespace AISpace.Launcher;
+namespace aisp.launch;
 
 internal static class LauncherBootstrap
 {
@@ -31,7 +31,7 @@ internal static class LauncherBootstrap
     {
         var dir = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "AISpace",
+            "aisp",
             "Launcher",
             "WebView2"
         );

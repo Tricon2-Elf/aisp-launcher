@@ -54,7 +54,7 @@ jobs:
 
       - name: Publish win-x86
         run: >
-          dotnet publish AISpace.Launcher/AISpace.Launcher.csproj
+          dotnet publish aisp.launch/aisp.launch.csproj
           -c Release
           -p:PublishProfile=win-x86
           -p:InformationalVersion=${{ needs.calver.outputs.version }}
@@ -68,22 +68,22 @@ jobs:
       - name: Build built-in locale hook DLL (x86)
         shell: pwsh
         run: |
-          cl /nologo /LD /O2 /EHsc AISpace.LocaleHook/aisp.localehook.cpp /link /OUT:AISpace.Launcher/bin/publish/win-x86/aisp.localehook.dll
+          cl /nologo /LD /O2 /EHsc aisp.hook/aisp.hook.cpp /link /OUT:aisp.launch/bin/publish/win-x86/aisp.hook.dll
 
       - name: Package win-x86 launcher bundle
         shell: pwsh
         run: |
-          $bundleDir = "AISpace.Launcher/bin/publish/win-x86/launcher-bundle"
+          $bundleDir = "aisp.launch/bin/publish/win-x86/launcher-bundle"
           New-Item -ItemType Directory -Path $bundleDir -Force | Out-Null
-          Copy-Item "AISpace.Launcher/bin/publish/win-x86/aisp.launch.exe" $bundleDir -Force
-          Copy-Item "AISpace.Launcher/bin/publish/win-x86/aisp.localehook.dll" $bundleDir -Force
-          Compress-Archive -Path "$bundleDir/*" -DestinationPath "AISpace.Launcher/bin/publish/win-x86/aisp.launch.win-x86.bundle.zip" -Force
+          Copy-Item "aisp.launch/bin/publish/win-x86/aisp.launch.exe" $bundleDir -Force
+          Copy-Item "aisp.launch/bin/publish/win-x86/aisp.hook.dll" $bundleDir -Force
+          Compress-Archive -Path "$bundleDir/*" -DestinationPath "aisp.launch/bin/publish/win-x86/aisp.launch.win-x86.bundle.zip" -Force
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: launcher-win-x86
-          path: AISpace.Launcher/bin/publish/win-x86/aisp.launch.win-x86.bundle.zip
+          path: aisp.launch/bin/publish/win-x86/aisp.launch.win-x86.bundle.zip
 
   release:
     needs: [calver, build-windows]

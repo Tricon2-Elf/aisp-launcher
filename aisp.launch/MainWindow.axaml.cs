@@ -5,7 +5,7 @@ using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Interactivity;
 using Avalonia.Layout;
 
-namespace AISpace.Launcher;
+namespace aisp.launch;
 
 public partial class MainWindow : Window
 {

@@ -1,6 +1,6 @@
 using System.Reflection;
 
-namespace AISpace.Launcher;
+namespace aisp.launch;
 
 internal static class LaunchVersion
 {

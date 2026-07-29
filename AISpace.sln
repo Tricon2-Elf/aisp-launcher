@@ -3,9 +3,9 @@ Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio Version 17
 VisualStudioVersion = 17.0.31903.59
 MinimumVisualStudioVersion = 10.0.40219.1
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AISpace.Launcher", "AISpace.Launcher\AISpace.Launcher.csproj", "{D256E05A-12F9-4F97-AAE7-DAF403DAA3D4}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "aisp.launch", "aisp.launch\aisp.launch.csproj", "{D256E05A-12F9-4F97-AAE7-DAF403DAA3D4}"
 EndProject
-Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "AISpace.LocaleHook", "AISpace.LocaleHook\AISpace.LocaleHook.vcxproj", "{1A8458AE-C577-434D-A6A2-03033FCF1F42}"
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "aisp.hook", "aisp.hook\aisp.hook.vcxproj", "{1A8458AE-C577-434D-A6A2-03033FCF1F42}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution

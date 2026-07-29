@@ -1,7 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
-namespace AISpace.Launcher;
+namespace aisp.launch;
 
 public sealed class LauncherSettings
 {
@@ -13,7 +13,7 @@ public sealed class LauncherSettings
     public string GameExecutable { get; set; } = DefaultGameExecutable;
 
     /// <summary>
-    /// When true on Windows, launcher injects aisp.localehook.dll into the game process
+    /// When true on Windows, launcher injects aisp.hook.dll into the game process
     /// to emulate Japanese ACP/locale without external locale emulator tools.
     /// </summary>
     public bool UseLocaleReplacer { get; set; } = true;

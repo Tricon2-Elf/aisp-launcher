@@ -31,7 +31,7 @@
     <VCProjectVersion>17.0</VCProjectVersion>
     <Keyword>Win32Proj</Keyword>
     <ProjectGuid>{1A8458AE-C577-434D-A6A2-03033FCF1F42}</ProjectGuid>
-    <RootNamespace>AISpace.LocaleHook</RootNamespace>
+    <RootNamespace>aisp.hook</RootNamespace>
     <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
   </PropertyGroup>
 
@@ -79,7 +79,7 @@
   </ImportGroup>
   <PropertyGroup Label="UserMacros" Condition="'$(_HasVisualCppTools)' == 'true'" />
   <PropertyGroup Condition="'$(_HasVisualCppTools)' == 'true'">
-    <TargetName>aisp.localehook</TargetName>
+    <TargetName>aisp.hook</TargetName>
     <OutDir>$(ProjectDir)bin\$(Platform)\$(Configuration)\</OutDir>
     <IntDir>$(ProjectDir)obj\$(Platform)\$(Configuration)\</IntDir>
   </PropertyGroup>
@@ -156,14 +156,14 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <ClCompile Include="aisp.localehook.cpp" />
+    <ClCompile Include="aisp.hook.cpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)Microsoft.Cpp.targets" Condition="'$(_HasVisualCppTools)' == 'true'" />
   <ImportGroup Label="ExtensionTargets" Condition="'$(_HasVisualCppTools)' == 'true'" />
 
   <!-- Successful no-op when MSVC MSBuild targets are unavailable (dotnet CLI / WSL). -->
   <Target Name="Build" Condition="'$(_HasVisualCppTools)' != 'true'">
-    <Message Importance="high" Text="Skipping AISpace.LocaleHook: Visual C++ toolchain not available. Build with Visual Studio on Windows, or ./scripts/build-localehook.sh." />
+    <Message Importance="high" Text="Skipping aisp.hook: Visual C++ toolchain not available. Build with Visual Studio on Windows, or ./scripts/build-hook.sh." />
   </Target>
   <Target Name="Clean" Condition="'$(_HasVisualCppTools)' != 'true'" />
   <Target Name="Rebuild" Condition="'$(_HasVisualCppTools)' != 'true'" DependsOnTargets="Clean;Build" />

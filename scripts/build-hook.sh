@@ -2,8 +2,8 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-SOURCE="$ROOT/AISpace.LocaleHook/aisp.localehook.cpp"
-OUTPUT="${1:-$ROOT/AISpace.Launcher/bin/publish/win-x64/aisp.localehook.dll}"
+SOURCE="$ROOT/aisp.hook/aisp.hook.cpp"
+OUTPUT="${1:-$ROOT/aisp.launch/bin/publish/win-x64/aisp.hook.dll}"
 DOCKER_IMAGE="${LOCALEHOOK_DOCKER_IMAGE:-debian:bookworm-slim}"
 
 if [ ! -f "$SOURCE" ]; then

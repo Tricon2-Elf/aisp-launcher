@@ -1,11 +1,11 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 
-namespace AISpace.Launcher;
+namespace aisp.launch;
 
 public sealed class GameLauncher(LauncherSettings settings)
 {
-    private const string LocaleHookLibrary = "aisp.localehook.dll";
+    private const string LocaleHookLibrary = "aisp.hook.dll";
 
     public string SettingsPath { get; } = LauncherSettings.GetPath();
 

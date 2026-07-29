@@ -1,7 +1,7 @@
 using System.Runtime.InteropServices;
 using System.Text;
 
-namespace AISpace.Launcher;
+namespace aisp.launch;
 
 internal static class WindowsLocaleInjector
 {

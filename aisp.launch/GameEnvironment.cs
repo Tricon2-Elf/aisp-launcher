@@ -1,4 +1,4 @@
-namespace AISpace.Launcher;
+namespace aisp.launch;
 
 public enum GameEnvironment
 {

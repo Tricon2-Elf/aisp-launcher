@@ -6,7 +6,7 @@
         mc:Ignorable="d"
         d:DesignWidth="1024"
         d:DesignHeight="720"
-        x:Class="AISpace.Launcher.MainWindow"
+        x:Class="aisp.launch.MainWindow"
         Title="aisp.launch"
         Width="1024"
         Height="720"

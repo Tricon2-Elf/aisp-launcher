@@ -1,7 +1,7 @@
 ﻿using System;
 using Avalonia;
 
-namespace AISpace.Launcher;
+namespace aisp.launch;
 
 class Program
 {
