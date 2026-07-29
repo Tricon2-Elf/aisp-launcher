@@ -1,0 +1,41 @@
+name: Build
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Publish win-x86 launcher
+        run: >
+          dotnet publish aisp.launch/aisp.launch.csproj
+          -c Release
+          -p:PublishProfile=win-x86
+
+      - name: Setup MSVC x86 toolchain
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x86
+
+      - name: Build hook DLL (x86)
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path aisp.launch/bin/publish/win-x86 -Force | Out-Null
+          cl /nologo /LD /O2 /EHsc aisp.hook/aisp.hook.cpp /link /OUT:aisp.launch/bin/publish/win-x86/aisp.hook.dll
