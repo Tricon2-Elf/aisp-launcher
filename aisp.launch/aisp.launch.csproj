@@ -52,7 +52,7 @@
     <PackageReference Include="Avalonia.Themes.Fluent" Version="12.0.4" />
     <PackageReference Include="Avalonia.Fonts.Inter" Version="12.1.1" />
     <!-- Always reference for compile/IDE; WithDeveloperTools is only called under #if DEBUG. -->
-    <PackageReference Include="AvaloniaUI.DiagnosticsSupport" Version="2.2.2">
+    <PackageReference Include="AvaloniaUI.DiagnosticsSupport" Version="2.2.3">
       <PrivateAssets>all</PrivateAssets>
     </PackageReference>
   </ItemGroup>
