@@ -12,9 +12,22 @@ namespace aisp.launch;
 public sealed class LocalHttpServer : IAsyncDisposable
 {
     public const string NicoPlayerPath = "/player/jdfoiajwpefha/nicoplayer.php";
+    public const string LocalVideoPath = "/__aisp_nicotv_test/video.mp4";
+    public const string DefaultVideoFileName = "input.mp4";
     public const string LiveNicoHost = "live.nicovideo.jp";
 
+    private readonly string? _videoFilePath;
+    private readonly bool _loopVideo;
+
     private WebApplication? _app;
+
+    public LocalHttpServer(string? videoFileName = null, bool loopVideo = false)
+    {
+        _loopVideo = loopVideo;
+        _videoFilePath = ResolveVideoFile(videoFileName ?? DefaultVideoFileName);
+    }
+
+    public bool HasVideoFile => _videoFilePath is not null;
 
     public async Task<LocalHttpServerResult> StartAsync(CancellationToken cancellationToken = default)
     {
@@ -39,6 +52,7 @@ public sealed class LocalHttpServer : IAsyncDisposable
             });
 
             var app = builder.Build();
+            var videoFilePath = _videoFilePath;
 
             app.Use(
                 async (context, next) =>
@@ -71,6 +85,30 @@ public sealed class LocalHttpServer : IAsyncDisposable
                 }
             );
 
+            if (videoFilePath is not null)
+            {
+                app.MapMethods(
+                    LocalVideoPath,
+                    [HttpMethods.Get, HttpMethods.Head],
+                    async (HttpContext context) =>
+                    {
+                        if (!File.Exists(videoFilePath))
+                        {
+                            await WriteNotFound(context);
+                            return;
+                        }
+
+                        await Results
+                            .File(
+                                videoFilePath,
+                                contentType: "video/mp4",
+                                enableRangeProcessing: true
+                            )
+                            .ExecuteAsync(context);
+                    }
+                );
+            }
+
             app.MapMethods(
                 NicoPlayerPath,
                 [HttpMethods.Get, HttpMethods.Head],
@@ -80,24 +118,7 @@ public sealed class LocalHttpServer : IAsyncDisposable
             app.MapMethods(
                 "/watch/{*liveId}",
                 [HttpMethods.Get, HttpMethods.Head],
-                (HttpContext context, string? liveId) =>
-                {
-                    if (!IsLiveNicoHost(context))
-                        return WriteNotFound(context);
-
-                    return WriteDiagnosticPage(
-                        context,
-                        "Nico Live request intercepted",
-                        new Dictionary<string, string>
-                        {
-                            ["Live ID"] = string.IsNullOrWhiteSpace(liveId)
-                                ? "(empty)"
-                                : Uri.UnescapeDataString(liveId.Trim('/')),
-                            ["Host"] = GetRequestHost(context),
-                            ["Status"] = "The request reached the local launcher proxy.",
-                        }
-                    );
-                }
+                (HttpContext context, string? liveId) => HandleLiveWatchRequest(context, liveId)
             );
 
             app.MapFallback(async (HttpContext context) =>
@@ -115,7 +136,19 @@ public sealed class LocalHttpServer : IAsyncDisposable
 
             await app.StartAsync(cancellationToken);
             _app = app;
-            return LocalHttpServerResult.Success("Local HTTP server started on http://127.0.0.1/");
+
+            var message = HasVideoFile
+                ? $"Local HTTP server started on http://127.0.0.1/ using {_videoFilePath}"
+                : "Local HTTP server started on http://127.0.0.1/";
+
+            if (!HasVideoFile)
+            {
+                Trace.WriteLine(
+                    $"Local Nico TV video not found. Place {DefaultVideoFileName} next to the launcher to enable playback."
+                );
+            }
+
+            return LocalHttpServerResult.Success(message);
         }
         catch (Exception ex) when (IsBindFailure(ex))
         {
@@ -136,7 +169,7 @@ public sealed class LocalHttpServer : IAsyncDisposable
         }
     }
 
-    private static Task HandleNicoPlayerRequest(HttpContext context)
+    private Task HandleNicoPlayerRequest(HttpContext context)
     {
         var query = context.Request.Query;
         var movieId = query["movieid"].ToString().Trim();
@@ -150,20 +183,28 @@ public sealed class LocalHttpServer : IAsyncDisposable
 
         if (!string.IsNullOrEmpty(movieId))
         {
+            if (HasVideoFile)
+                return WriteVideoPlayerPage(context, movieId);
+
             return WriteDiagnosticPage(
                 context,
                 "Movie request intercepted",
                 new Dictionary<string, string>
                 {
                     ["Movie ID"] = movieId,
-                    ["Status"] = "Media playback is not configured in the launcher yet.",
+                    ["Status"] =
+                        $"Place {DefaultVideoFileName} next to the launcher to enable local playback.",
                 }
             );
         }
 
         if (!string.IsNullOrEmpty(tvId) || !string.IsNullOrEmpty(channelId))
         {
-            var channelKey = $"{tvId}:{channelId}";
+            var requestLabel =
+                $"TV {(string.IsNullOrEmpty(tvId) ? "?" : tvId)} / channel {(string.IsNullOrEmpty(channelId) ? "?" : channelId)}";
+            if (HasVideoFile)
+                return WriteVideoPlayerPage(context, requestLabel);
+
             return WriteDiagnosticPage(
                 context,
                 "TV request intercepted",
@@ -171,8 +212,9 @@ public sealed class LocalHttpServer : IAsyncDisposable
                 {
                     ["TV ID"] = string.IsNullOrEmpty(tvId) ? "(empty)" : tvId,
                     ["Channel ID"] = string.IsNullOrEmpty(channelId) ? "(empty)" : channelId,
-                    ["Channel-map key"] = channelKey,
-                    ["Status"] = "Media playback is not configured in the launcher yet.",
+                    ["Channel-map key"] = $"{tvId}:{channelId}",
+                    ["Status"] =
+                        $"Place {DefaultVideoFileName} next to the launcher to enable local playback.",
                 }
             );
         }
@@ -184,9 +226,49 @@ public sealed class LocalHttpServer : IAsyncDisposable
             {
                 ["Request path"] = context.Request.Path.Value ?? "/",
                 ["Query"] = context.Request.QueryString.Value?.TrimStart('?') ?? "(empty)",
-                ["Status"] = "The request reached the local launcher proxy.",
+                ["Status"] = HasVideoFile
+                    ? "The request reached the local launcher proxy."
+                    : $"The request reached the local launcher proxy, but {DefaultVideoFileName} was not found.",
             }
         );
+    }
+
+    private Task HandleLiveWatchRequest(HttpContext context, string? liveId)
+    {
+        if (!IsLiveNicoHost(context))
+            return WriteNotFound(context);
+
+        var decodedLiveId = string.IsNullOrWhiteSpace(liveId)
+            ? "(empty ID)"
+            : Uri.UnescapeDataString(liveId.Trim('/'));
+
+        Trace.WriteLine($"Nico Live watch request intercepted for {decodedLiveId}");
+
+        if (HasVideoFile)
+            return WriteVideoPlayerPage(context, decodedLiveId);
+
+        return WriteDiagnosticPage(
+            context,
+            "Nico Live request intercepted",
+            new Dictionary<string, string>
+            {
+                ["Live ID"] = decodedLiveId,
+                ["Host"] = GetRequestHost(context),
+                ["Status"] =
+                    $"The request reached the local launcher proxy, but {DefaultVideoFileName} was not found.",
+            }
+        );
+    }
+
+    private Task WriteVideoPlayerPage(HttpContext context, string requestLabel)
+    {
+        var body = NicoTvPages.BuildVideoPlayerPage(
+            requestLabel,
+            LocalVideoPath,
+            _loopVideo
+        );
+        Trace.WriteLine($"Serving local Trident autoplay test for {requestLabel}");
+        return WriteBytes(context, body, "text/html; charset=utf-8");
     }
 
     private static Task WriteDiagnosticPage(
@@ -233,6 +315,14 @@ public sealed class LocalHttpServer : IAsyncDisposable
 
     private static bool IsLiveNicoHost(HttpContext context) =>
         string.Equals(GetRequestHost(context), LiveNicoHost, StringComparison.OrdinalIgnoreCase);
+
+    private static string? ResolveVideoFile(string fileName)
+    {
+        var resolved = Path.IsPathRooted(fileName)
+            ? fileName
+            : Path.Combine(AppContext.BaseDirectory, fileName);
+        return File.Exists(resolved) ? Path.GetFullPath(resolved) : null;
+    }
 
     public async Task StopAsync(CancellationToken cancellationToken = default)
     {
