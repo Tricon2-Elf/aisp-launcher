@@ -5,13 +5,16 @@ namespace aisp.launch;
 
 public static partial class HostsFile
 {
-    public const string Hostname = "aisp.jp";
+    public static readonly string[] Hostnames = ["aisp.jp", "live.nicovideo.jp"];
+
     public const string Marker = "# aisp.launch";
 
-    private static readonly (string Address, string Line)[] RequiredEntries =
+    private static readonly (string Address, string Hostname)[] RequiredEntries =
     [
-        ("127.0.0.1", $"127.0.0.1 {Hostname} {Marker}"),
-        ("::1", $"::1 {Hostname} {Marker}"),
+        ("127.0.0.1", "aisp.jp"),
+        ("::1", "aisp.jp"),
+        ("127.0.0.1", "live.nicovideo.jp"),
+        ("::1", "live.nicovideo.jp"),
     ];
 
     public static string GetPath()
@@ -26,6 +29,13 @@ public static partial class HostsFile
             );
         }
 
+        if (IsWsl())
+        {
+            const string windowsHosts = "/mnt/c/Windows/System32/drivers/etc/hosts";
+            if (File.Exists(windowsHosts))
+                return windowsHosts;
+        }
+
         return "/etc/hosts";
     }
 
@@ -37,16 +47,18 @@ public static partial class HostsFile
             var lines = File.Exists(path) ? File.ReadAllLines(path).ToList() : [];
 
             if (!ApplyChanges(lines))
-                return HostsFileResult.Success("Hosts file already configured for aisp.jp.");
+                return HostsFileResult.Success("Hosts file already configured for Nico TV proxy hosts.");
 
             File.WriteAllLines(path, lines);
-            return HostsFileResult.Success("Added aisp.jp redirect to the hosts file.");
+            return HostsFileResult.Success(
+                "Added aisp.jp and live.nicovideo.jp redirects to the hosts file."
+            );
         }
         catch (UnauthorizedAccessException)
         {
             return HostsFileResult.Failure(
                 "Could not write to the hosts file.",
-                "Run the launcher as administrator (Windows) or with sudo (Linux) once to add the aisp.jp redirect."
+                "Run the launcher as administrator (Windows) or with sudo (Linux) once to add the Nico TV proxy hosts entries."
             );
         }
         catch (Exception ex)
@@ -57,20 +69,22 @@ public static partial class HostsFile
 
     private static bool ApplyChanges(List<string> lines)
     {
-        var foundAddresses = new HashSet<string>(StringComparer.Ordinal);
+        var foundEntries = new HashSet<string>(StringComparer.Ordinal);
         var changed = false;
 
         for (var i = lines.Count - 1; i >= 0; i--)
         {
-            if (!TryParseHostname(lines[i], out var address))
+            if (!TryParseManagedHostname(lines[i], out var address, out var hostname))
                 continue;
 
+            var entryKey = $"{address}|{hostname}";
             if (IsLoopbackAddress(address))
             {
-                foundAddresses.Add(address);
-                if (!lines[i].Contains(Marker, StringComparison.Ordinal))
+                foundEntries.Add(entryKey);
+                var expectedLine = FormatEntry(address, hostname);
+                if (!string.Equals(lines[i], expectedLine, StringComparison.Ordinal))
                 {
-                    lines[i] = RequiredEntries.First(entry => entry.Address == address).Line;
+                    lines[i] = expectedLine;
                     changed = true;
                 }
 
@@ -81,21 +95,30 @@ public static partial class HostsFile
             changed = true;
         }
 
-        foreach (var (address, line) in RequiredEntries)
+        foreach (var (address, hostname) in RequiredEntries)
         {
-            if (foundAddresses.Contains(address))
+            var entryKey = $"{address}|{hostname}";
+            if (foundEntries.Contains(entryKey))
                 continue;
 
-            lines.Add(line);
+            lines.Add(FormatEntry(address, hostname));
             changed = true;
         }
 
         return changed;
     }
 
-    private static bool TryParseHostname(string line, out string address)
+    private static string FormatEntry(string address, string hostname) =>
+        $"{address} {hostname} {Marker}";
+
+    private static bool TryParseManagedHostname(
+        string line,
+        out string address,
+        out string hostname
+    )
     {
         address = string.Empty;
+        hostname = string.Empty;
 
         var trimmed = line.Trim();
         if (trimmed.Length == 0 || trimmed.StartsWith('#'))
@@ -110,14 +133,55 @@ public static partial class HostsFile
             return false;
 
         address = parts[0];
-        return parts.Skip(1).Any(part => HostnameToken().IsMatch(part));
+        foreach (var candidate in parts.Skip(1))
+        {
+            foreach (var managedHostname in Hostnames)
+            {
+                if (HostnameToken(managedHostname).IsMatch(candidate))
+                {
+                    hostname = managedHostname;
+                    return true;
+                }
+            }
+        }
+
+        return false;
     }
 
     private static bool IsLoopbackAddress(string address) =>
         address is "127.0.0.1" or "::1";
 
+    private static bool IsWsl()
+    {
+        try
+        {
+            if (File.Exists("/proc/sys/kernel/osrelease"))
+            {
+                var release = File.ReadAllText("/proc/sys/kernel/osrelease");
+                return release.Contains("microsoft", StringComparison.OrdinalIgnoreCase);
+            }
+        }
+        catch
+        {
+            // Ignore and treat as non-WSL.
+        }
+
+        return false;
+    }
+
     [GeneratedRegex(@"^aisp\.jp$", RegexOptions.IgnoreCase)]
-    private static partial Regex HostnameToken();
+    private static partial Regex AispHostnameToken();
+
+    [GeneratedRegex(@"^live\.nicovideo\.jp$", RegexOptions.IgnoreCase)]
+    private static partial Regex LiveNicoHostnameToken();
+
+    private static Regex HostnameToken(string hostname) =>
+        hostname switch
+        {
+            "aisp.jp" => AispHostnameToken(),
+            "live.nicovideo.jp" => LiveNicoHostnameToken(),
+            _ => throw new ArgumentOutOfRangeException(nameof(hostname)),
+        };
 }
 
 public readonly record struct HostsFileResult(

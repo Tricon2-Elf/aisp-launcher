@@ -11,6 +11,8 @@ class Program
     [STAThread]
     public static void Main(string[] args)
     {
+        AppDomain.CurrentDomain.ProcessExit += (_, _) => LauncherServices.Stop();
+
         LauncherBootstrap.Initialize();
         BuildAvaloniaApp().StartWithClassicDesktopLifetime(args);
     }
