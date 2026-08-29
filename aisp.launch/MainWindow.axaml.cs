@@ -1,7 +1,6 @@
 using System.Runtime.InteropServices;
 using Avalonia;
 using Avalonia.Controls;
-using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Interactivity;
 using Avalonia.Layout;
 
@@ -41,18 +40,12 @@ public partial class MainWindow : Window
 
         var result = _gameLauncher.TryLaunch(environment);
         if (result.Succeeded)
-        {
-            if (
-                Application.Current?.ApplicationLifetime
-                is IClassicDesktopStyleApplicationLifetime desktop
-            )
-                desktop.Shutdown();
             return;
-        }
+
         await ShowMessageAsync("Unable to start game", $"{result.Message}\n\n{result.Details}");
     }
 
-    private async Task ShowMessageAsync(string title, string message)
+    public async Task ShowMessageAsync(string title, string message)
     {
         var okButton = new Button
         {
