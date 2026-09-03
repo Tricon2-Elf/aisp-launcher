@@ -3,26 +3,47 @@ namespace aisp.launch;
 internal static class LauncherServices
 {
     private static LocalHttpServer? _httpServer;
+    private static TwitchBridge? _twitchBridge;
     private static readonly Lock Sync = new();
     private static int _stopped;
 
     public static async Task InitializeAsync(MainWindow mainWindow)
     {
-        var hostsResult = HostsFile.TryApply();
-        if (!hostsResult.Succeeded)
-        {
-            await mainWindow.ShowMessageAsync(
-                "Hosts file",
-                $"{hostsResult.Message}\n\n{hostsResult.Details}"
-            );
-        }
+        TempCleanup.Run();
 
         TridentCache.TryClearLegacyPlayerCache();
+
+        var settings = LauncherBootstrap.Settings;
+        TwitchBridge? twitchBridge = null;
+        if (!string.IsNullOrWhiteSpace(settings.TwitchChannel))
+        {
+            try
+            {
+                var tools = await MediaToolsResolver.ResolveAsync(settings.ToolsDirectory);
+                twitchBridge = new TwitchBridge(
+                    settings.TwitchChannel.Trim(),
+                    tools,
+                    settings.TwitchQuality,
+                    settings.TwitchSegmentSeconds,
+                    settings.TwitchRetainedSegments,
+                    settings.TwitchBufferSegments
+                );
+                twitchBridge.Start();
+                _twitchBridge = twitchBridge;
+            }
+            catch (Exception ex)
+            {
+                await mainWindow.ShowMessageAsync(
+                    "Twitch bridge",
+                    ex.Message
+                );
+            }
+        }
 
         LocalHttpServer httpServer;
         lock (Sync)
         {
-            _httpServer ??= new LocalHttpServer();
+            _httpServer ??= new LocalHttpServer(twitchBridge);
             httpServer = _httpServer;
         }
 
@@ -42,23 +63,34 @@ internal static class LauncherServices
             return;
 
         LocalHttpServer? httpServer;
+        TwitchBridge? twitchBridge;
         lock (Sync)
         {
             httpServer = _httpServer;
+            twitchBridge = _twitchBridge;
             _httpServer = null;
+            _twitchBridge = null;
         }
-
-        if (httpServer is null)
-            return;
 
         try
         {
-            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
-            httpServer.StopAsync(timeout.Token).GetAwaiter().GetResult();
+            twitchBridge?.Dispose();
         }
         catch
         {
-            // Best-effort shutdown during app exit.
+            // Best-effort shutdown.
         }
+
+        TempCleanup.Run();
+
+        // Do not wait for Kestrel. StopAsync/DisposeAsync can deadlock the
+        // Avalonia UI thread via SynchronizationContext.
+        _ = httpServer;
+    }
+
+    public static void ExitProcess()
+    {
+        Stop();
+        Environment.Exit(0);
     }
 }

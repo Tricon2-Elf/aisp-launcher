@@ -26,6 +26,10 @@ public sealed class GameLauncher(LauncherSettings settings)
         try
         {
             var gameDirectory = Path.GetDirectoryName(executable) ?? AppContext.BaseDirectory;
+            var nicoPlayerPatch = NicoPlayerArchivePatch.TryApply(executable);
+            if (!nicoPlayerPatch.Succeeded)
+                return nicoPlayerPatch;
+
             ConnectionFile.Write(gameDirectory, envSettings);
 
             var gameArgs = "./data";
@@ -48,13 +52,24 @@ public sealed class GameLauncher(LauncherSettings settings)
                     );
                 }
 
-                var injected = WindowsLocaleInjector.TryLaunchWithHook(
-                    executable,
-                    gameArgs,
-                    gameDirectory,
-                    hookDll
+                var previousPocSetting = Environment.GetEnvironmentVariable("AISP_BROWSER_POC");
+                Environment.SetEnvironmentVariable(
+                    "AISP_BROWSER_POC",
+                    Settings.EnableBrowserReplacementProofOfConcept ? "1" : null
                 );
-                return injected;
+                try
+                {
+                    return WindowsLocaleInjector.TryLaunchWithHook(
+                        executable,
+                        gameArgs,
+                        gameDirectory,
+                        hookDll
+                    );
+                }
+                finally
+                {
+                    Environment.SetEnvironmentVariable("AISP_BROWSER_POC", previousPocSetting);
+                }
             }
 
             Process.Start(startInfo);

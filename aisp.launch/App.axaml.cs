@@ -1,4 +1,5 @@
 using Avalonia;
+using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Markup.Xaml;
 
@@ -17,13 +18,8 @@ public partial class App : Application
         {
             var mainWindow = new MainWindow();
             desktop.MainWindow = mainWindow;
-            mainWindow.Closing += (_, _) => LauncherServices.Stop();
-            desktop.Exit += (_, _) =>
-            {
-                LauncherServices.Stop();
-                if (OperatingSystem.IsWindows())
-                    Environment.Exit(0);
-            };
+            desktop.ShutdownMode = ShutdownMode.OnMainWindowClose;
+            desktop.Exit += (_, _) => LauncherServices.ExitProcess();
             _ = LauncherServices.InitializeAsync(mainWindow);
         }
 

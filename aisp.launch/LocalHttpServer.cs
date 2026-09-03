@@ -12,22 +12,31 @@ namespace aisp.launch;
 public sealed class LocalHttpServer : IAsyncDisposable
 {
     public const string NicoPlayerPath = "/player/jdfoiajwpefha/nicoplayer.php";
+    public const string LocalNicoPlayerPath = "/p";
+    public const string LivePlayerPath = "/player.html";
     public const string LocalVideoPath = "/__aisp_nicotv_test/video.mp4";
     public const string DefaultVideoFileName = "input.mp4";
-    public const string LiveNicoHost = "live.nicovideo.jp";
 
+    private readonly TwitchBridge? _twitchBridge;
     private readonly string? _videoFilePath;
     private readonly bool _loopVideo;
 
     private WebApplication? _app;
 
-    public LocalHttpServer(string? videoFileName = null, bool loopVideo = false)
+    public LocalHttpServer(
+        TwitchBridge? twitchBridge = null,
+        string? videoFileName = null,
+        bool loopVideo = false
+    )
     {
+        _twitchBridge = twitchBridge;
         _loopVideo = loopVideo;
         _videoFilePath = ResolveVideoFile(videoFileName ?? DefaultVideoFileName);
     }
 
     public bool HasVideoFile => _videoFilePath is not null;
+
+    public bool HasTwitchBridge => _twitchBridge is not null;
 
     public async Task<LocalHttpServerResult> StartAsync(CancellationToken cancellationToken = default)
     {
@@ -53,6 +62,7 @@ public sealed class LocalHttpServer : IAsyncDisposable
 
             var app = builder.Build();
             var videoFilePath = _videoFilePath;
+            var twitchBridge = _twitchBridge;
 
             app.Use(
                 async (context, next) =>
@@ -109,8 +119,63 @@ public sealed class LocalHttpServer : IAsyncDisposable
                 );
             }
 
+            if (twitchBridge is not null)
+            {
+                app.MapMethods(
+                    NicoTvConstants.TwitchManifestPath,
+                    [HttpMethods.Get, HttpMethods.Head],
+                    (HttpContext context) =>
+                    {
+                        var manifest = twitchBridge.BuildManifestJson();
+                        return WriteText(context, manifest, "application/json; charset=utf-8");
+                    }
+                );
+
+                app.MapMethods(
+                    NicoTvConstants.TwitchInitPath,
+                    [HttpMethods.Get, HttpMethods.Head],
+                    async (HttpContext context) =>
+                    {
+                        var initPath = twitchBridge.GetInitPath();
+                        if (initPath is null)
+                        {
+                            await WriteNotFound(context);
+                            return;
+                        }
+
+                        await Results
+                            .File(initPath, contentType: "video/mp4", enableRangeProcessing: true)
+                            .ExecuteAsync(context);
+                    }
+                );
+
+                app.MapMethods(
+                    $"{NicoTvConstants.TwitchSegmentPrefix}{{segmentName}}",
+                    [HttpMethods.Get, HttpMethods.Head],
+                    async (HttpContext context, string segmentName) =>
+                    {
+                        var segmentPath = twitchBridge.GetSegmentPath(segmentName);
+                        if (segmentPath is null)
+                        {
+                            await WriteNotFound(context);
+                            return;
+                        }
+
+                        await Results
+                            .File(segmentPath, contentType: "video/mp4", enableRangeProcessing: true)
+                            .ExecuteAsync(context);
+                    }
+                );
+            }
+
             app.MapMethods(
                 NicoPlayerPath,
+                [HttpMethods.Get, HttpMethods.Head],
+                HandleNicoPlayerRequest
+            );
+
+            app.MapMethods(
+                LocalNicoPlayerPath,
                 [HttpMethods.Get, HttpMethods.Head],
                 HandleNicoPlayerRequest
             );
@@ -119,6 +184,12 @@ public sealed class LocalHttpServer : IAsyncDisposable
                 "/watch/{*liveId}",
                 [HttpMethods.Get, HttpMethods.Head],
                 (HttpContext context, string? liveId) => HandleLiveWatchRequest(context, liveId)
+            );
+
+            app.MapMethods(
+                LivePlayerPath,
+                [HttpMethods.Get, HttpMethods.Head],
+                HandleLivePlayerRequest
             );
 
             app.MapFallback(async (HttpContext context) =>
@@ -137,11 +208,13 @@ public sealed class LocalHttpServer : IAsyncDisposable
             await app.StartAsync(cancellationToken);
             _app = app;
 
-            var message = HasVideoFile
-                ? $"Local HTTP server started on http://127.0.0.1/ using {_videoFilePath}"
-                : "Local HTTP server started on http://127.0.0.1/";
+            var message = HasTwitchBridge
+                ? $"Local HTTP server started on http://127.0.0.1/ with Twitch channel {_twitchBridge!.Channel}"
+                : HasVideoFile
+                    ? $"Local HTTP server started on http://127.0.0.1/ using {_videoFilePath}"
+                    : "Local HTTP server started on http://127.0.0.1/";
 
-            if (!HasVideoFile)
+            if (!HasTwitchBridge && !HasVideoFile)
             {
                 Trace.WriteLine(
                     $"Local Nico TV video not found. Place {DefaultVideoFileName} next to the launcher to enable playback."
@@ -154,7 +227,7 @@ public sealed class LocalHttpServer : IAsyncDisposable
         {
             return LocalHttpServerResult.Failure(
                 "Could not start the local HTTP server on port 80.",
-                "Port 80 may already be in use, or the launcher may need administrator/root privileges to bind that port."
+                "Port 80 may already be in use. Close the application using it, then try again."
                     + Environment.NewLine
                     + Environment.NewLine
                     + ex.Message
@@ -183,6 +256,9 @@ public sealed class LocalHttpServer : IAsyncDisposable
 
         if (!string.IsNullOrEmpty(movieId))
         {
+            if (HasTwitchBridge)
+                return WriteTwitchPlayerPage(context, movieId);
+
             if (HasVideoFile)
                 return WriteVideoPlayerPage(context, movieId);
 
@@ -202,6 +278,9 @@ public sealed class LocalHttpServer : IAsyncDisposable
         {
             var requestLabel =
                 $"TV {(string.IsNullOrEmpty(tvId) ? "?" : tvId)} / channel {(string.IsNullOrEmpty(channelId) ? "?" : channelId)}";
+            if (HasTwitchBridge)
+                return WriteTwitchPlayerPage(context, requestLabel);
+
             if (HasVideoFile)
                 return WriteVideoPlayerPage(context, requestLabel);
 
@@ -226,23 +305,23 @@ public sealed class LocalHttpServer : IAsyncDisposable
             {
                 ["Request path"] = context.Request.Path.Value ?? "/",
                 ["Query"] = context.Request.QueryString.Value?.TrimStart('?') ?? "(empty)",
-                ["Status"] = HasVideoFile
+                ["Status"] = HasTwitchBridge || HasVideoFile
                     ? "The request reached the local launcher proxy."
-                    : $"The request reached the local launcher proxy, but {DefaultVideoFileName} was not found.",
+                    : $"The request reached the local launcher proxy, but no Twitch channel or {DefaultVideoFileName} is configured.",
             }
         );
     }
 
     private Task HandleLiveWatchRequest(HttpContext context, string? liveId)
     {
-        if (!IsLiveNicoHost(context))
-            return WriteNotFound(context);
-
         var decodedLiveId = string.IsNullOrWhiteSpace(liveId)
             ? "(empty ID)"
             : Uri.UnescapeDataString(liveId.Trim('/'));
 
         Trace.WriteLine($"Nico Live watch request intercepted for {decodedLiveId}");
+
+        if (HasTwitchBridge)
+            return WriteTwitchPlayerPage(context, decodedLiveId);
 
         if (HasVideoFile)
             return WriteVideoPlayerPage(context, decodedLiveId);
@@ -258,6 +337,26 @@ public sealed class LocalHttpServer : IAsyncDisposable
                     $"The request reached the local launcher proxy, but {DefaultVideoFileName} was not found.",
             }
         );
+    }
+
+    private static Task HandleLivePlayerRequest(HttpContext context)
+    {
+        Trace.WriteLine("Redirecting the Nico Live player page to the local help page.");
+        context.Response.Redirect("file:///C:/Users/tricon2_elf/Desktop/aispace/data/help/index.html");
+        return Task.CompletedTask;
+    }
+
+    private Task WriteTwitchPlayerPage(HttpContext context, string requestLabel)
+    {
+        var body = NicoTvPages.BuildTwitchPlayerPage(
+            _twitchBridge!.Channel,
+            requestLabel,
+            NicoTvConstants.TwitchManifestPath
+        );
+        Trace.WriteLine(
+            $"Serving Twitch player for channel '{_twitchBridge.Channel}' (request {requestLabel})"
+        );
+        return WriteBytes(context, body, "text/html; charset=utf-8");
     }
 
     private Task WriteVideoPlayerPage(HttpContext context, string requestLabel)
@@ -312,9 +411,6 @@ public sealed class LocalHttpServer : IAsyncDisposable
 
     private static string GetRequestHost(HttpContext context) =>
         context.Request.Headers.Host.ToString().Split(':', 2)[0];
-
-    private static bool IsLiveNicoHost(HttpContext context) =>
-        string.Equals(GetRequestHost(context), LiveNicoHost, StringComparison.OrdinalIgnoreCase);
 
     private static string? ResolveVideoFile(string fileName)
     {

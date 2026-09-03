@@ -18,6 +18,32 @@ public sealed class LauncherSettings
     /// </summary>
     public bool UseLocaleReplacer { get; set; } = true;
 
+    /// <summary>
+    /// Enables diagnostics for the experimental browser-host replacement seam.
+    /// This does not replace Trident yet; it only verifies interception of the
+    /// client's AtlAxWin80 creation call. Requires the built-in locale hook.
+    /// </summary>
+    public bool EnableBrowserReplacementProofOfConcept { get; set; }
+
+    /// <summary>
+    /// Twitch channel to bridge into the in-game Nico TV player.
+    /// When set, Streamlink and FFmpeg are resolved or downloaded locally.
+    /// </summary>
+    public string? TwitchChannel { get; set; } = "crelly247";
+
+    public string TwitchQuality { get; set; } = "480p";
+
+    public int TwitchSegmentSeconds { get; set; } = 2;
+
+    public int TwitchRetainedSegments { get; set; } = 30;
+
+    public int TwitchBufferSegments { get; set; } = 3;
+
+    /// <summary>
+    /// Directory for downloaded Streamlink/FFmpeg bundles, relative to the launcher.
+    /// </summary>
+    public string ToolsDirectory { get; set; } = NicoTvConstants.DefaultToolsDirectory;
+
     public GameEnvironment SelectedEnvironment { get; set; } = GameEnvironment.Stable;
 
     public Dictionary<string, EnvironmentSettings> Environments { get; set; } =

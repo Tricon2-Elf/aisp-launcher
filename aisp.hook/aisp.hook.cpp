@@ -1,6 +1,5 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
-#include <strsafe.h>
 #include <tlhelp32.h>
 #include <cstring>
 #include <cwchar>
@@ -20,7 +19,7 @@ using GetUserDefaultLangID_t = LANGID(WINAPI*)();
 using GetSystemDefaultLangID_t = LANGID(WINAPI*)();
 using MultiByteToWideChar_t = int(WINAPI*)(UINT, DWORD, LPCCH, int, LPWSTR, int);
 using WideCharToMultiByte_t = int(WINAPI*)(UINT, DWORD, LPCWCH, int, LPSTR, int, LPCCH, LPBOOL);
-using LoadLibraryW_t = HMODULE(WINAPI*)(LPCWSTR);
+using CreateWindowExW_t = HWND(WINAPI*)(DWORD, LPCWSTR, LPCWSTR, DWORD, int, int, int, int, HWND, HMENU, HINSTANCE, LPVOID);
 
 GetACP_t g_originalGetACP = nullptr;
 GetOEMCP_t g_originalGetOEMCP = nullptr;
@@ -31,7 +30,10 @@ GetUserDefaultLangID_t g_originalGetUserDefaultLangID = nullptr;
 GetSystemDefaultLangID_t g_originalGetSystemDefaultLangID = nullptr;
 MultiByteToWideChar_t g_originalMultiByteToWideChar = nullptr;
 WideCharToMultiByte_t g_originalWideCharToMultiByte = nullptr;
-LoadLibraryW_t g_originalLoadLibraryW = nullptr;
+CreateWindowExW_t g_originalCreateWindowExW = nullptr;
+bool g_browserReplacementPocEnabled = false;
+
+void PatchModule(HMODULE module);
 
 UINT WINAPI HookGetACP()
 {
@@ -93,56 +95,52 @@ int WINAPI HookWideCharToMultiByte(
                : 0;
 }
 
-bool IsD3d9LibraryPath(LPCWSTR path)
+bool IsAtlAxHostClass(LPCWSTR className)
 {
-    if (!path || !*path)
-        return false;
-
-    const wchar_t* fileName = path;
-    if (const wchar_t* slash = std::wcsrchr(path, L'\\'))
-        fileName = slash + 1;
-    if (const wchar_t* slash = std::wcsrchr(fileName, L'/'))
-        fileName = slash + 1;
-
-    return _wcsicmp(fileName, L"d3d9.dll") == 0 || _wcsicmp(fileName, L"d3d9") == 0;
+    return reinterpret_cast<ULONG_PTR>(className) > 0xFFFF && _wcsicmp(className, L"AtlAxWin80") == 0;
 }
 
-bool BuildLocalD3d9Path(wchar_t* outPath, size_t outPathCount)
+HWND WINAPI HookCreateWindowExW(
+    DWORD extendedStyle,
+    LPCWSTR className,
+    LPCWSTR windowName,
+    DWORD style,
+    int x,
+    int y,
+    int width,
+    int height,
+    HWND parent,
+    HMENU menu,
+    HINSTANCE instance,
+    LPVOID parameter
+)
 {
-    if (!outPath || outPathCount == 0)
-        return false;
-
-    wchar_t processPath[MAX_PATH] = {};
-    const DWORD processPathLen = GetModuleFileNameW(nullptr, processPath, MAX_PATH);
-    if (processPathLen == 0 || processPathLen >= MAX_PATH)
-        return false;
-
-    wchar_t* lastSlash = std::wcsrchr(processPath, L'\\');
-    if (!lastSlash)
-        return false;
-    *(lastSlash + 1) = L'\0';
-
-    if (FAILED(StringCchCopyW(outPath, outPathCount, processPath)))
-        return false;
-    if (FAILED(StringCchCatW(outPath, outPathCount, L"d3d9.dll")))
-        return false;
-
-    return GetFileAttributesW(outPath) != INVALID_FILE_ATTRIBUTES;
-}
-
-HMODULE WINAPI HookLoadLibraryW(LPCWSTR lpLibFileName)
-{
-    if (!g_originalLoadLibraryW)
-        return nullptr;
-
-    if (IsD3d9LibraryPath(lpLibFileName))
+    // Stage 1 of the browser-replacement POC: verify the exact host creation
+    // seam without changing behavior. The next stage replaces this ATL host and
+    // answers WM_ATLGETCONTROL with an IWebBrowser2 compatibility shim.
+    if (IsAtlAxHostClass(className))
     {
-        wchar_t localD3d9Path[MAX_PATH] = {};
-        if (BuildLocalD3d9Path(localD3d9Path, sizeof(localD3d9Path) / sizeof(localD3d9Path[0])))
-            return g_originalLoadLibraryW(localD3d9Path);
+        OutputDebugStringW(L"[aisp browser POC] AtlAxWin80 source: ");
+        OutputDebugStringW(windowName ? windowName : L"(null)");
+        OutputDebugStringW(L"\n");
     }
 
-    return g_originalLoadLibraryW(lpLibFileName);
+    return g_originalCreateWindowExW
+               ? g_originalCreateWindowExW(
+                     extendedStyle,
+                     className,
+                     windowName,
+                     style,
+                     x,
+                     y,
+                     width,
+                     height,
+                     parent,
+                     menu,
+                     instance,
+                     parameter
+                 )
+               : nullptr;
 }
 
 template <typename T>
@@ -226,7 +224,9 @@ void PatchModule(HMODULE module)
     PatchImport(module, "GetSystemDefaultLangID", reinterpret_cast<void*>(HookGetSystemDefaultLangID), &g_originalGetSystemDefaultLangID);
     PatchImport(module, "MultiByteToWideChar", reinterpret_cast<void*>(HookMultiByteToWideChar), &g_originalMultiByteToWideChar);
     PatchImport(module, "WideCharToMultiByte", reinterpret_cast<void*>(HookWideCharToMultiByte), &g_originalWideCharToMultiByte);
-    PatchImport(module, "LoadLibraryW", reinterpret_cast<void*>(HookLoadLibraryW), &g_originalLoadLibraryW);
+
+    if (g_browserReplacementPocEnabled && module == GetModuleHandleW(nullptr))
+        PatchSingleImport(module, "USER32.dll", "CreateWindowExW", reinterpret_cast<void*>(HookCreateWindowExW), &g_originalCreateWindowExW);
 }
 
 void PatchLoadedModules()
@@ -249,6 +249,7 @@ void PatchLoadedModules()
 
     CloseHandle(snapshot);
 }
+
 } // namespace
 
 BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID)
@@ -256,6 +257,9 @@ BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID)
     if (reason == DLL_PROCESS_ATTACH)
     {
         DisableThreadLibraryCalls(instance);
+        wchar_t browserPocSetting[2] = {};
+        g_browserReplacementPocEnabled = GetEnvironmentVariableW(L"AISP_BROWSER_POC", browserPocSetting, 2) == 1
+                                     && browserPocSetting[0] == L'1';
         PatchLoadedModules();
     }
     return TRUE;

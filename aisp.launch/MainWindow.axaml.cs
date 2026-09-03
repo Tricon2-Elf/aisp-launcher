@@ -15,7 +15,6 @@ public partial class MainWindow : Window
         InitializeComponent();
 
         Title = LaunchVersion.WindowTitle;
-        Closing += OnClosing;
 
         _gameLauncher = new GameLauncher(LauncherBootstrap.Settings);
 
@@ -30,12 +29,6 @@ public partial class MainWindow : Window
         if (!LocaleReplacerCheckBox.IsEnabled)
             LocaleReplacerCheckBox.Content = "Use Locale Replacer (Windows only)";
         WebsiteWebView.Source = new Uri(_gameLauncher.Settings.WebsiteUrl);
-    }
-
-    private void OnClosing(object? sender, WindowClosingEventArgs e)
-    {
-        WebsiteWebView.Source = new Uri("about:blank");
-        LauncherServices.Stop();
     }
 
     private async void OnStartGameClick(object? sender, RoutedEventArgs e)
