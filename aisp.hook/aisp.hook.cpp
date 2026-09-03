@@ -1,5 +1,7 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#include <ole2.h>
+#include <strsafe.h>
 #include <tlhelp32.h>
 #include <cstring>
 #include <cwchar>
@@ -20,6 +22,9 @@ using GetSystemDefaultLangID_t = LANGID(WINAPI*)();
 using MultiByteToWideChar_t = int(WINAPI*)(UINT, DWORD, LPCCH, int, LPWSTR, int);
 using WideCharToMultiByte_t = int(WINAPI*)(UINT, DWORD, LPCWCH, int, LPSTR, int, LPCCH, LPBOOL);
 using CreateWindowExW_t = HWND(WINAPI*)(DWORD, LPCWSTR, LPCWSTR, DWORD, int, int, int, int, HWND, HMENU, HINSTANCE, LPVOID);
+using OleDraw_t = HRESULT(WINAPI*)(IUnknown*, DWORD, HDC, LPCRECT);
+using StartCefRenderer_t = void(WINAPI*)(LPCWSTR, int, int);
+using DrawCefFrame_t = bool(WINAPI*)(HDC, const RECT*);
 
 GetACP_t g_originalGetACP = nullptr;
 GetOEMCP_t g_originalGetOEMCP = nullptr;
@@ -31,7 +36,17 @@ GetSystemDefaultLangID_t g_originalGetSystemDefaultLangID = nullptr;
 MultiByteToWideChar_t g_originalMultiByteToWideChar = nullptr;
 WideCharToMultiByte_t g_originalWideCharToMultiByte = nullptr;
 CreateWindowExW_t g_originalCreateWindowExW = nullptr;
+OleDraw_t g_originalOleDraw = nullptr;
+StartCefRenderer_t g_startCefRenderer = nullptr;
+DrawCefFrame_t g_drawCefFrame = nullptr;
+HMODULE g_cefRendererModule = nullptr;
 bool g_browserReplacementPocEnabled = false;
+LONG g_loggedCefDrawFallback = 0;
+LONG g_loggedCefDrawSuccess = 0;
+HWND g_gameWindow = nullptr;
+RECT g_gameWindowRect = {};
+wchar_t g_gameWindowTitle[256] = {};
+bool g_gameWindowStateCaptured = false;
 
 void PatchModule(HMODULE module);
 
@@ -100,6 +115,131 @@ bool IsAtlAxHostClass(LPCWSTR className)
     return reinterpret_cast<ULONG_PTR>(className) > 0xFFFF && _wcsicmp(className, L"AtlAxWin80") == 0;
 }
 
+bool IsLocalNicoPlayerUrl(LPCWSTR source)
+{
+    constexpr wchar_t kPrefix[] = L"http://127.0.0.1/p?";
+    return source && std::wcsncmp(source, kPrefix, _countof(kPrefix) - 1) == 0;
+}
+
+void WriteBrowserPocTraceLine(LPCWSTR line)
+{
+    wchar_t path[MAX_PATH] = {};
+    const DWORD length = GetModuleFileNameW(nullptr, path, MAX_PATH);
+    if (length == 0 || length >= MAX_PATH)
+        return;
+
+    wchar_t* fileName = std::wcsrchr(path, L'\\');
+    if (!fileName || FAILED(StringCchCopyW(fileName + 1, MAX_PATH - (fileName + 1 - path), L"aisp.browser-poc.log")))
+        return;
+
+    HANDLE file = CreateFileW(path, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file == INVALID_HANDLE_VALUE)
+        return;
+
+    DWORD written = 0;
+    WriteFile(file, line, static_cast<DWORD>(std::wcslen(line) * sizeof(wchar_t)), &written, nullptr);
+    CloseHandle(file);
+}
+
+void WriteBrowserPocTrace(LPCWSTR source)
+{
+    wchar_t line[512] = {};
+    if (SUCCEEDED(StringCchPrintfW(line, _countof(line), L"AtlAxWin80: %s\r\n", source ? source : L"(null)")))
+        WriteBrowserPocTraceLine(line);
+}
+
+void CaptureGameWindowState(HWND child)
+{
+    HWND window = child ? GetAncestor(child, GA_ROOT) : nullptr;
+    DWORD processId = 0;
+    if (!window || !GetWindowThreadProcessId(window, &processId) || processId != GetCurrentProcessId())
+        return;
+
+    RECT rect = {};
+    if (!GetWindowRect(window, &rect))
+        return;
+
+    g_gameWindow = window;
+    g_gameWindowRect = rect;
+    GetWindowTextW(window, g_gameWindowTitle, _countof(g_gameWindowTitle));
+    g_gameWindowStateCaptured = true;
+}
+
+void RestoreGameWindowState()
+{
+    if (!g_gameWindowStateCaptured || !IsWindow(g_gameWindow))
+        return;
+
+    if (g_gameWindowTitle[0])
+        SetWindowTextW(g_gameWindow, g_gameWindowTitle);
+    SetWindowPos(
+        g_gameWindow,
+        nullptr,
+        g_gameWindowRect.left,
+        g_gameWindowRect.top,
+        g_gameWindowRect.right - g_gameWindowRect.left,
+        g_gameWindowRect.bottom - g_gameWindowRect.top,
+        SWP_NOACTIVATE | SWP_NOZORDER | SWP_FRAMECHANGED
+    );
+}
+
+bool EnsureCefRendererLoaded()
+{
+    if (g_cefRendererModule)
+        return g_startCefRenderer && g_drawCefFrame;
+
+    wchar_t path[MAX_PATH] = {};
+    const DWORD length = GetModuleFileNameW(nullptr, path, MAX_PATH);
+    if (length == 0 || length >= MAX_PATH)
+    {
+        WriteBrowserPocTraceLine(L"CEF plugin: unable to resolve game directory\r\n");
+        return false;
+    }
+
+    wchar_t* fileName = std::wcsrchr(path, L'\\');
+    if (!fileName)
+    {
+        WriteBrowserPocTraceLine(L"CEF plugin: game path has no directory\r\n");
+        return false;
+    }
+    *fileName = L'\0';
+
+    wchar_t runtimeDirectory[MAX_PATH] = {};
+    wchar_t rendererPath[MAX_PATH] = {};
+    if (
+        FAILED(StringCchPrintfW(runtimeDirectory, _countof(runtimeDirectory), L"%s\\aisp.cef", path))
+        || FAILED(StringCchPrintfW(rendererPath, _countof(rendererPath), L"%s\\aisp.cef-renderer.dll", runtimeDirectory))
+    )
+    {
+        WriteBrowserPocTraceLine(L"CEF plugin: runtime path is too long\r\n");
+        return false;
+    }
+
+    SetDllDirectoryW(runtimeDirectory);
+    g_cefRendererModule = LoadLibraryW(rendererPath);
+    if (!g_cefRendererModule)
+    {
+        wchar_t line[128] = {};
+        StringCchPrintfW(line, _countof(line), L"CEF plugin: LoadLibraryW failed (%lu)\r\n", GetLastError());
+        WriteBrowserPocTraceLine(line);
+        return false;
+    }
+
+    // The CEF renderer is a 32-bit WINAPI DLL. MinGW exports stdcall symbols
+    // with their argument-byte suffix, so resolve those exact names rather
+    // than the undecorated C++ source identifiers.
+    g_startCefRenderer = reinterpret_cast<StartCefRenderer_t>(GetProcAddress(g_cefRendererModule, "StartCefRenderer@12"));
+    g_drawCefFrame = reinterpret_cast<DrawCefFrame_t>(GetProcAddress(g_cefRendererModule, "DrawCefFrame@8"));
+    if (g_startCefRenderer && g_drawCefFrame)
+    {
+        WriteBrowserPocTraceLine(L"CEF plugin: loaded\r\n");
+        return true;
+    }
+
+    WriteBrowserPocTraceLine(L"CEF plugin: required exports are missing\r\n");
+    return false;
+}
+
 HWND WINAPI HookCreateWindowExW(
     DWORD extendedStyle,
     LPCWSTR className,
@@ -123,6 +263,13 @@ HWND WINAPI HookCreateWindowExW(
         OutputDebugStringW(L"[aisp browser POC] AtlAxWin80 source: ");
         OutputDebugStringW(windowName ? windowName : L"(null)");
         OutputDebugStringW(L"\n");
+        WriteBrowserPocTrace(windowName);
+        if (IsLocalNicoPlayerUrl(windowName) && EnsureCefRendererLoaded())
+        {
+            CaptureGameWindowState(parent);
+            g_startCefRenderer(windowName, width, height);
+            RestoreGameWindowState();
+        }
     }
 
     return g_originalCreateWindowExW
@@ -141,6 +288,30 @@ HWND WINAPI HookCreateWindowExW(
                      parameter
                  )
                : nullptr;
+}
+
+HRESULT WINAPI HookOleDraw(IUnknown* unknown, DWORD aspect, HDC destination, LPCRECT destinationRect)
+{
+    // Trident is retained for the document and JavaScript bridge the client
+    // already uses. Only its final draw into the game-owned TV bitmap is
+    // replaced with CEF's off-screen BGRA frame.
+    if (aspect == DVASPECT_CONTENT && g_drawCefFrame)
+    {
+        if (g_drawCefFrame(destination, destinationRect))
+        {
+            if (InterlockedCompareExchange(&g_loggedCefDrawSuccess, 1, 0) == 0)
+            {
+                RestoreGameWindowState();
+                WriteBrowserPocTraceLine(L"CEF texture: first frame drawn\r\n");
+            }
+            return S_OK;
+        }
+
+        if (InterlockedCompareExchange(&g_loggedCefDrawFallback, 1, 0) == 0)
+            WriteBrowserPocTraceLine(L"CEF texture: no frame available; using Trident fallback\r\n");
+    }
+
+    return g_originalOleDraw ? g_originalOleDraw(unknown, aspect, destination, destinationRect) : E_FAIL;
 }
 
 template <typename T>
@@ -226,7 +397,10 @@ void PatchModule(HMODULE module)
     PatchImport(module, "WideCharToMultiByte", reinterpret_cast<void*>(HookWideCharToMultiByte), &g_originalWideCharToMultiByte);
 
     if (g_browserReplacementPocEnabled && module == GetModuleHandleW(nullptr))
+    {
         PatchSingleImport(module, "USER32.dll", "CreateWindowExW", reinterpret_cast<void*>(HookCreateWindowExW), &g_originalCreateWindowExW);
+        PatchSingleImport(module, "OLE32.dll", "OleDraw", reinterpret_cast<void*>(HookOleDraw), &g_originalOleDraw);
+    }
 }
 
 void PatchLoadedModules()

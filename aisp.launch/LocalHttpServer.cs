@@ -20,17 +20,20 @@ public sealed class LocalHttpServer : IAsyncDisposable
     private readonly TwitchBridge? _twitchBridge;
     private readonly string? _videoFilePath;
     private readonly bool _loopVideo;
+    private readonly bool _browserPocEnabled;
 
     private WebApplication? _app;
 
     public LocalHttpServer(
         TwitchBridge? twitchBridge = null,
         string? videoFileName = null,
-        bool loopVideo = false
+        bool loopVideo = false,
+        bool browserPocEnabled = false
     )
     {
         _twitchBridge = twitchBridge;
         _loopVideo = loopVideo;
+        _browserPocEnabled = browserPocEnabled;
         _videoFilePath = ResolveVideoFile(videoFileName ?? DefaultVideoFileName);
     }
 
@@ -244,6 +247,8 @@ public sealed class LocalHttpServer : IAsyncDisposable
 
     private Task HandleNicoPlayerRequest(HttpContext context)
     {
+        WriteBrowserPocHttpTrace(context);
+
         var query = context.Request.Query;
         var movieId = query["movieid"].ToString().Trim();
         var tvId = query["tvid"].ToString().Trim();
@@ -344,6 +349,27 @@ public sealed class LocalHttpServer : IAsyncDisposable
         Trace.WriteLine("Redirecting the Nico Live player page to the local help page.");
         context.Response.Redirect("file:///C:/Users/tricon2_elf/Desktop/aispace/data/help/index.html");
         return Task.CompletedTask;
+    }
+
+    private void WriteBrowserPocHttpTrace(HttpContext context)
+    {
+        if (!_browserPocEnabled)
+            return;
+
+        try
+        {
+            var userAgent = context.Request.Headers.UserAgent.ToString().Replace('\r', ' ').Replace('\n', ' ');
+            var line = $"{DateTimeOffset.UtcNow:O} {context.Request.Method} {context.Request.Path}{context.Request.QueryString} user-agent={userAgent}{Environment.NewLine}";
+            File.AppendAllText(
+                Path.Combine(AppContext.BaseDirectory, "aisp.browser-poc-http.log"),
+                line,
+                System.Text.Encoding.UTF8
+            );
+        }
+        catch
+        {
+            // Diagnostics must never interfere with the local player response.
+        }
     }
 
     private Task WriteTwitchPlayerPage(HttpContext context, string requestLabel)

@@ -43,7 +43,10 @@ internal static class LauncherServices
         LocalHttpServer httpServer;
         lock (Sync)
         {
-            _httpServer ??= new LocalHttpServer(twitchBridge);
+            _httpServer ??= new LocalHttpServer(
+                twitchBridge,
+                browserPocEnabled: settings.EnableBrowserReplacementProofOfConcept
+            );
             httpServer = _httpServer;
         }
 

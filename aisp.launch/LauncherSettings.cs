@@ -19,9 +19,10 @@ public sealed class LauncherSettings
     public bool UseLocaleReplacer { get; set; } = true;
 
     /// <summary>
-    /// Enables diagnostics for the experimental browser-host replacement seam.
-    /// This does not replace Trident yet; it only verifies interception of the
-    /// client's AtlAxWin80 creation call. Requires the built-in locale hook.
+    /// Enables the experimental CEF off-screen renderer for the game's AISP TV
+    /// surface. Trident remains available for the game's document/JavaScript
+    /// bridge; CEF replaces only the final texture pixels. Requires the built-in
+    /// locale hook.
     /// </summary>
     public bool EnableBrowserReplacementProofOfConcept { get; set; }
 
