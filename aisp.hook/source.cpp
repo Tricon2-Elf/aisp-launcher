@@ -8,6 +8,8 @@ namespace aisp
 namespace
 {
 const ScreenSource kSources[] = {
+    {L"streamlink:", RunFfmpegSource},
+    {L"stream:", RunFfmpegSource},
     {L"pattern:", RunPatternSource},
 };
 } // namespace

@@ -11,7 +11,7 @@
 
 namespace aisp
 {
-constexpr int kDefaultFps = 30;           // a source renders at a constant rate; the page may pick another
+constexpr int kDefaultFps = 30;           // ffmpeg's fps filter makes the video constant-rate; the page may pick another
 // The decoded rings are small on purpose: jitter is absorbed on the compressed side (streamlink's
 // lead and buffer, ffmpeg paced at real time). A frame has to wait in the ring only from the
 // moment ffmpeg emits it next to its audio until that audio is actually heard, which is the
@@ -154,29 +154,37 @@ struct ScreenStream
     wchar_t source[512] = {};
     HANDLE thread = nullptr;
     HANDLE audioRenderThread = nullptr;
+    HANDLE processes[2] = {};
     volatile LONG stop = 0;
     ScreenStream* next = nullptr;
 };
 
 extern ScreenStream* g_streams;
 extern CRITICAL_SECTION g_streamsLock;
+extern HANDLE g_job;
 extern HANDLE g_toolLog;
 extern bool g_screenVideoInitialised;
 extern HANDLE g_watchdog;
 extern bool g_logStats;
 
-// aisp.screen.log next to the game executable (opened by InitScreenVideo).
+// aisp.screen.log next to the game executable (opened by InitScreenVideo); tool stderr goes there too.
 void LogLine(const char* text);
 void DebugLog(const wchar_t* format, const wchar_t* arg);
 bool BuildGameFilePath(const wchar_t* fileName, wchar_t* outPath, size_t outPathCount);
 // The line the screen shows while a source has nothing to draw yet (or failed).
 void SetStatus(ScreenStream* stream, const wchar_t* text);
 
+// Child processes: resolved from an environment variable or the game directory, attached to
+// the job so they die with the game, stderr to the log.
+bool ToolPath(const wchar_t* variable, const wchar_t* fallback, wchar_t* out, size_t outCount);
+HANDLE LaunchTool(wchar_t* commandLine, HANDLE stdIn, HANDLE stdOut);
+bool CreateInheritablePipe(HANDLE* readEnd, HANDLE* writeEnd, bool inheritRead);
 // Seconds since the Unix epoch, UTC, from the system clock.
 double UnixNow();
 // Where the page's shared timeline puts a video right now, wrapped into `duration` when known
 // (0 for none), and 0 when the page gives no timeline.
 double TimelinePosition(ScreenStream* stream, double duration);
+bool ReadFully(HANDLE pipe, BYTE* buffer, DWORD size, volatile LONG* stop);
 
 // Ring writers with back pressure: they wait while the ring is full and return false once the
 // session is stopping. A source writes frame f and then its samplesPerFrame samples, so the

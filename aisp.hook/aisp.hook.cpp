@@ -179,11 +179,12 @@ HMODULE WINAPI HookLoadLibraryW(LPCWSTR lpLibFileName)
 // The client draws a screen by calling OleDraw on the browser's document every frame and
 // copying a fixed rectangle out of the result. That import is hooked too: when the page names a
 // stream source in its title, the page is left idle and the pixels come from a source instead
-// (source.h: the built-in test pattern). A source fills a frame ring and a sample ring
-// (screen.h); the audio device is the clock and the presenter shows the frame matching the
-// samples played. Volume and mute come from the page, which publishes
-// "aisp:vol=<0-100>;mute=<0|1>" in its title when the client calls its ext_setVolume /
-// ext_setMute script functions. Session events go to aisp.screen.log next to the game
+// (source.h: streamlink/ffmpeg for streams, the built-in test pattern; the server translates
+// its own ids such as tw: and lv… into those). A source fills a frame ring and a sample ring (screen.h); the audio device is the
+// clock and the presenter shows the frame matching the samples played. Volume and mute come
+// from the page, which publishes "aisp:vol=<0-100>;mute=<0|1>" in its title when the client
+// calls its ext_setVolume / ext_setMute script functions. Child processes are attached to a
+// job so they die with the game; stderr of every tool goes to aisp.screen.log next to the game
 // executable.
 // ---------------------------------------------------------------------------------------------
 
@@ -501,6 +502,14 @@ void InitScreenVideo()
     InitializeCriticalSection(&g_streamsLock);
     g_watchdog = CreateThread(nullptr, 0, WatchdogThread, nullptr, 0, nullptr);
 
+    g_job = CreateJobObjectW(nullptr, nullptr);
+    if (g_job)
+    {
+        JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits = {};
+        limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        SetInformationJobObject(g_job, JobObjectExtendedLimitInformation, &limits, sizeof(limits));
+    }
+
     wchar_t logPath[MAX_PATH] = {};
     if (BuildGameFilePath(L"aisp.screen.log", logPath, MAX_PATH))
     {
@@ -512,8 +521,8 @@ void InitScreenVideo()
 }
 // --- audio -----------------------------------------------------------------------------------
 
-// Opens the default render device in shared mode at its mix format so the source can produce
-// samples at the exact sample rate and channel count. Runs before the source starts.
+// Opens the default render device in shared mode at its mix format so ffmpeg can be told the
+// exact sample rate and channel count. Runs before ffmpeg starts.
 bool PrepareAudio(ScreenStream* stream)
 {
     IMMDeviceEnumerator* enumerator = nullptr;
@@ -781,9 +790,28 @@ void StopSession(ScreenStream* stream)
         return;
     stream->sessionActive = false;
     InterlockedExchange(&stream->stop, 1);
-    // Take the thread handles out under the lock; whoever nulls a field owns it. The source
-    // thread first; the renderer's handle is taken only once it is gone, since the source
-    // starts it. A wait that times out gets a log line: the workers all watch `stop`.
+    // Take the handles out under the lock: a source in the middle of its own retry (EndAttempt)
+    // may be closing some of them, and whoever nulls a field owns it. Processes first, so a
+    // source blocked reading ffmpeg's output sees the pipe close.
+    HANDLE processes[2] = {};
+    EnterCriticalSection(&stream->lock);
+    for (int i = 0; i < 2; ++i)
+    {
+        processes[i] = stream->processes[i];
+        stream->processes[i] = nullptr;
+    }
+    LeaveCriticalSection(&stream->lock);
+    for (HANDLE process : processes)
+    {
+        if (process)
+        {
+            TerminateProcess(process, 0);
+            CloseHandle(process);
+        }
+    }
+    // The source thread first (its pipe closes with the process); the renderer's handle is
+    // taken only once it is gone, since the source starts it. A wait that times out gets a
+    // log line: the workers all watch `stop`.
     const ULONGLONG waitStart = GetTickCount64();
     HANDLE threads[2] = {};
     const char* names[2] = {"source", "audio renderer"};

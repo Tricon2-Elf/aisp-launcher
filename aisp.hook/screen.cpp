@@ -10,6 +10,7 @@ namespace aisp
 {
 ScreenStream* g_streams = nullptr;
 CRITICAL_SECTION g_streamsLock;
+HANDLE g_job = nullptr;
 HANDLE g_toolLog = INVALID_HANDLE_VALUE;
 bool g_screenVideoInitialised = false;
 HANDLE g_watchdog = nullptr;
@@ -62,6 +63,47 @@ void SetStatus(ScreenStream* stream, const wchar_t* text)
     DebugLog(L"aisp.hook: screen: %s\n", text);
 }
 
+// The tool path from the environment variable, or `fallback` relative to the game directory.
+bool ToolPath(const wchar_t* variable, const wchar_t* fallback, wchar_t* out, size_t outCount)
+{
+    if (GetEnvironmentVariableW(variable, out, static_cast<DWORD>(outCount)) == 0 || !out[0])
+    {
+        if (!BuildGameFilePath(fallback, out, outCount))
+            return false;
+    }
+    return GetFileAttributesW(out) != INVALID_FILE_ATTRIBUTES;
+}
+
+// Starts a child with the given standard handles (nullptr = the log file / nothing) and puts it
+// in the job. The command line buffer is modified by CreateProcessW.
+HANDLE LaunchTool(wchar_t* commandLine, HANDLE stdIn, HANDLE stdOut)
+{
+    STARTUPINFOW startup = {};
+    startup.cb = sizeof(startup);
+    startup.dwFlags = STARTF_USESTDHANDLES;
+    startup.hStdInput = stdIn ? stdIn : GetStdHandle(STD_INPUT_HANDLE);
+    startup.hStdOutput = stdOut ? stdOut : g_toolLog;
+    startup.hStdError = g_toolLog;
+
+    PROCESS_INFORMATION info = {};
+    if (!CreateProcessW(nullptr, commandLine, nullptr, nullptr, TRUE, CREATE_NO_WINDOW, nullptr, nullptr, &startup, &info))
+        return nullptr;
+    if (g_job)
+        AssignProcessToJobObject(g_job, info.hProcess);
+    CloseHandle(info.hThread);
+    return info.hProcess;
+}
+
+bool CreateInheritablePipe(HANDLE* readEnd, HANDLE* writeEnd, bool inheritRead)
+{
+    SECURITY_ATTRIBUTES inheritable = {sizeof(SECURITY_ATTRIBUTES), nullptr, TRUE};
+    if (!CreatePipe(readEnd, writeEnd, &inheritable, 1 << 20))
+        return false;
+    // Only the end the child uses may be inherited, or the pipe never reports EOF.
+    SetHandleInformation(inheritRead ? *writeEnd : *readEnd, HANDLE_FLAG_INHERIT, 0);
+    return true;
+}
+
 double UnixNow()
 {
     FILETIME now = {};
@@ -83,6 +125,21 @@ double TimelinePosition(ScreenStream* stream, double duration)
     if (duration > 0)
         position = std::fmod(position, duration);
     return position > 0 ? position : 0;
+}
+
+bool ReadFully(HANDLE pipe, BYTE* buffer, DWORD size, volatile LONG* stop)
+{
+    DWORD total = 0;
+    while (total < size)
+    {
+        if (*stop)
+            return false;
+        DWORD read = 0;
+        if (!ReadFile(pipe, buffer + total, size - total, &read, nullptr) || read == 0)
+            return false;
+        total += read;
+    }
+    return true;
 }
 
 bool PushVideoFrame(ScreenStream* stream, const BYTE* frame)
