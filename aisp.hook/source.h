@@ -17,7 +17,8 @@ const ScreenSource* FindSource(const wchar_t* source);
 bool IsKnownSource(const wchar_t* source);
 
 // source_ffmpeg.cpp: streamlink:<url> through streamlink into ffmpeg, stream:<url> straight
-// into ffmpeg; one AVI stream of raw BGRA frames and float samples on a pipe.
+// into ffmpeg, yt-dlp:<url> resolved by yt-dlp to direct media URLs and seeked to the shared
+// timeline position; one AVI stream of raw BGRA frames and float samples on a pipe.
 DWORD RunFfmpegSource(ScreenStream* stream);
 // source_pattern.cpp: pattern:live and pattern:vod, the hook's own calibration picture and test
 // tone; the vod follows the page's shared timeline.

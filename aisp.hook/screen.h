@@ -179,6 +179,9 @@ void SetStatus(ScreenStream* stream, const wchar_t* text);
 bool ToolPath(const wchar_t* variable, const wchar_t* fallback, wchar_t* out, size_t outCount);
 HANDLE LaunchTool(wchar_t* commandLine, HANDLE stdIn, HANDLE stdOut);
 bool CreateInheritablePipe(HANDLE* readEnd, HANDLE* writeEnd, bool inheritRead);
+bool RunToolForLine(wchar_t* commandLine, wchar_t* out, size_t outCount);
+// Up to maxLines lines of a tool's stdout (each up to lineCount characters); returns the count.
+int RunToolForLines(wchar_t* commandLine, wchar_t* lines, size_t lineCount, int maxLines);
 // Seconds since the Unix epoch, UTC, from the system clock.
 double UnixNow();
 // Where the page's shared timeline puts a video right now, wrapped into `duration` when known

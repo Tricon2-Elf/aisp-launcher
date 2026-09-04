@@ -179,8 +179,8 @@ HMODULE WINAPI HookLoadLibraryW(LPCWSTR lpLibFileName)
 // The client draws a screen by calling OleDraw on the browser's document every frame and
 // copying a fixed rectangle out of the result. That import is hooked too: when the page names a
 // stream source in its title, the page is left idle and the pixels come from a source instead
-// (source.h: streamlink/ffmpeg for streams, the built-in test pattern; the server translates
-// its own ids such as tw: and lv… into those). A source fills a frame ring and a sample ring (screen.h); the audio device is the
+// (source.h: streamlink/ffmpeg for streams, yt-dlp for videos, the built-in test pattern; the
+// server translates its own ids such as tw: and lv… into those). A source fills a frame ring and a sample ring (screen.h); the audio device is the
 // clock and the presenter shows the frame matching the samples played. Volume and mute come
 // from the page, which publishes "aisp:vol=<0-100>;mute=<0|1>" in its title when the client
 // calls its ext_setVolume / ext_setMute script functions. Child processes are attached to a

@@ -10,6 +10,7 @@ namespace
 const ScreenSource kSources[] = {
     {L"streamlink:", RunFfmpegSource},
     {L"stream:", RunFfmpegSource},
+    {L"yt-dlp:", RunFfmpegSource},
     {L"pattern:", RunPatternSource},
 };
 } // namespace

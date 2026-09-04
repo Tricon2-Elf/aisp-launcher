@@ -104,6 +104,52 @@ bool CreateInheritablePipe(HANDLE* readEnd, HANDLE* writeEnd, bool inheritRead)
     return true;
 }
 
+// Runs a tool to completion and returns its first stdout line (trimmed) in `out`.
+int RunToolForLines(wchar_t* commandLine, wchar_t* lines, size_t lineCount, int maxLines)
+{
+    HANDLE readEnd = nullptr, writeEnd = nullptr;
+    if (!CreateInheritablePipe(&readEnd, &writeEnd, false))
+        return 0;
+    HANDLE process = LaunchTool(commandLine, nullptr, writeEnd);
+    CloseHandle(writeEnd);
+    if (!process)
+    {
+        CloseHandle(readEnd);
+        return 0;
+    }
+
+    char buffer[16384] = {};
+    DWORD total = 0, read = 0;
+    while (total < sizeof(buffer) - 1 && ReadFile(readEnd, buffer + total, sizeof(buffer) - 1 - total, &read, nullptr) && read > 0)
+        total += read;
+    CloseHandle(readEnd);
+    WaitForSingleObject(process, 60000);
+    CloseHandle(process);
+    buffer[total] = '\0';
+
+    int count = 0;
+    char* cursor = buffer;
+    while (count < maxLines && *cursor)
+    {
+        char* end = std::strpbrk(cursor, "\r\n");
+        if (end)
+            *end = '\0';
+        if (*cursor && MultiByteToWideChar(CP_UTF8, 0, cursor, -1, lines + static_cast<size_t>(count) * lineCount, static_cast<int>(lineCount)) > 0)
+            ++count;
+        if (!end)
+            break;
+        cursor = end + 1;
+        while (*cursor == '\r' || *cursor == '\n')
+            ++cursor;
+    }
+    return count;
+}
+
+bool RunToolForLine(wchar_t* commandLine, wchar_t* out, size_t outCount)
+{
+    return RunToolForLines(commandLine, out, outCount, 1) == 1;
+}
+
 double UnixNow()
 {
     FILETIME now = {};
