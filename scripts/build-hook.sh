@@ -43,7 +43,7 @@ docker run --rm \
     bash -lc "set -euo pipefail \
         && apt-get update \
         && apt-get install -y --no-install-recommends g++-mingw-w64-i686 binutils-mingw-w64-i686 \
-        && i686-w64-mingw32-g++ -shared -O2 -s -std=gnu++17 -fno-exceptions -fno-rtti -static-libgcc -static-libstdc++ \"$SOURCE_IN_CONTAINER\" -o \"$OUTPUT_IN_CONTAINER\" \
+        && i686-w64-mingw32-g++ -shared -O2 -s -std=gnu++17 -fno-exceptions -fno-rtti -static-libgcc -static-libstdc++ \"$SOURCE_IN_CONTAINER\" -o \"$OUTPUT_IN_CONTAINER\" -loleaut32 \
         && i686-w64-mingw32-objdump -p \"$OUTPUT_IN_CONTAINER\" \
         && chown \"$HOST_UID:$HOST_GID\" \"$OUTPUT_IN_CONTAINER\""
 
