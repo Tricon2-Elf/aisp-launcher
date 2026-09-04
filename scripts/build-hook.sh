@@ -2,12 +2,12 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-SOURCE="$ROOT/aisp.hook/aisp.hook.cpp"
+SOURCE_DIR="$ROOT/aisp.hook"
 OUTPUT="${1:-$ROOT/aisp.launch/bin/publish/win-x64/aisp.hook.dll}"
 DOCKER_IMAGE="${LOCALEHOOK_DOCKER_IMAGE:-debian:bookworm-slim}"
 
-if [ ! -f "$SOURCE" ]; then
-    echo "Locale hook source not found: $SOURCE" >&2
+if [ ! -f "$SOURCE_DIR/aisp.hook.cpp" ]; then
+    echo "Locale hook source not found: $SOURCE_DIR" >&2
     exit 1
 fi
 
@@ -30,12 +30,12 @@ esac
 
 mkdir -p "$(dirname "$OUTPUT")"
 
-SOURCE_IN_CONTAINER="${SOURCE/#$ROOT/\/workspace}"
+SOURCE_DIR_IN_CONTAINER="${SOURCE_DIR/#$ROOT/\/workspace}"
 OUTPUT_IN_CONTAINER="${OUTPUT/#$ROOT/\/workspace}"
 HOST_UID="$(id -u)"
 HOST_GID="$(id -g)"
 
-# One-off containerized MinGW build (32-bit DLL for the x86 launcher/game).
+# One-off containerized MinGW build: a 32-bit DLL for the x86 launcher/game.
 docker run --rm \
     -v "$ROOT:/workspace" \
     -w /workspace \
@@ -43,7 +43,7 @@ docker run --rm \
     bash -lc "set -euo pipefail \
         && apt-get update \
         && apt-get install -y --no-install-recommends g++-mingw-w64-i686 binutils-mingw-w64-i686 \
-        && i686-w64-mingw32-g++ -shared -O2 -s -std=gnu++17 -fno-exceptions -fno-rtti -static-libgcc -static-libstdc++ \"$SOURCE_IN_CONTAINER\" -o \"$OUTPUT_IN_CONTAINER\" -loleaut32 \
+        && i686-w64-mingw32-g++ -shared -O2 -s -std=gnu++17 -fno-exceptions -fno-rtti -static-libgcc -static-libstdc++ $SOURCE_DIR_IN_CONTAINER/*.cpp -o \"$OUTPUT_IN_CONTAINER\" -loleaut32 -lgdi32 -lole32 \
         && i686-w64-mingw32-objdump -p \"$OUTPUT_IN_CONTAINER\" \
         && chown \"$HOST_UID:$HOST_GID\" \"$OUTPUT_IN_CONTAINER\""
 
