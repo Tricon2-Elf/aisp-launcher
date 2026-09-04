@@ -11,6 +11,7 @@
 #include <servprov.h>
 #include <mmdeviceapi.h>
 #include <audioclient.h>
+#include <audiopolicy.h>
 #include <cmath>
 #include <cstring>
 #include <cwchar>
@@ -179,8 +180,9 @@ HMODULE WINAPI HookLoadLibraryW(LPCWSTR lpLibFileName)
 // The client draws a screen by calling OleDraw on the browser's document every frame and
 // copying a fixed rectangle out of the result. That import is hooked too: when the page names a
 // stream source in its title, the page is left idle and the pixels come from a source instead
-// (source.h: streamlink/ffmpeg for streams, yt-dlp for videos, the built-in test pattern; the
-// server translates its own ids such as tw: and lv… into those). A source fills a frame ring and a sample ring (screen.h); the audio device is the
+// (source.h: streamlink/ffmpeg for streams, yt-dlp for videos, the built-in test pattern,
+// electron: for an off-screen browser in a sibling process; the server translates its own ids
+// such as tw: and lv… into those). A source fills a frame ring and a sample ring (screen.h); the audio device is the
 // clock and the presenter shows the frame matching the samples played. Volume and mute come
 // from the page, which publishes "aisp:vol=<0-100>;mute=<0|1>" in its title when the client
 // calls its ext_setVolume / ext_setMute script functions. Child processes are attached to a
@@ -209,12 +211,20 @@ const GUID kIidHtmlDocument2 = {0x332C4425, 0x26CB, 0x11D0, {0xB4, 0x83, 0x00, 0
 const GUID kIidServiceProvider = {0x6D5140C1, 0x7436, 0x11CE, {0x80, 0x34, 0x00, 0xAA, 0x00, 0x60, 0x09, 0xFA}};
 const GUID kSidWebBrowserApp = {0x0002DF05, 0x0000, 0x0000, {0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46}};
 const GUID kIidUnknown = {0x00000000, 0x0000, 0x0000, {0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46}};
-// The dashed form is the one in mmdeviceapi.h / audioclient.h; check a literal against it
+// The dashed form is the one in mmdeviceapi.h / audiopolicy.h; check a literal against it
 // before trusting it. A wrong IID here is an E_NOINTERFACE at runtime and nothing else.
 const GUID kClsidMMDeviceEnumerator = {0xBCDE0395, 0xE52F, 0x467C, {0x8E, 0x3D, 0xC4, 0x57, 0x92, 0x91, 0x69, 0x2E}}; // bcde0395-e52f-467c-8e3d-c4579291692e
 const GUID kIidMMDeviceEnumerator = {0xA95664D2, 0x9614, 0x4F35, {0xA7, 0x46, 0xDE, 0x8D, 0xB6, 0x36, 0x17, 0xE6}};   // a95664d2-9614-4f35-a746-de8db63617e6
 const GUID kIidAudioClient = {0x1CB9AD4C, 0xDBFA, 0x4C32, {0xB1, 0x78, 0xC2, 0xF5, 0x68, 0xA7, 0x03, 0xB2}};          // 1cb9ad4c-dbfa-4c32-b178-c2f568a703b2
 const GUID kIidAudioRenderClient = {0xF294ACFC, 0x3146, 0x4483, {0xA7, 0xBF, 0xAD, 0xDC, 0xA7, 0xC2, 0x60, 0xE2}};    // f294acfc-3146-4483-a7bf-addca7c260e2
+const GUID kIidAudioSessionManager2 = {0x77AA99A0, 0x1BD6, 0x484F, {0x8B, 0xC7, 0x2C, 0x65, 0x4C, 0x9A, 0x9B, 0x6F}}; // 77aa99a0-1bd6-484f-8bc7-2c654c9a9b6f
+const GUID kIidAudioSessionControl2 = {0xBFB7FF88, 0x7239, 0x4FC9, {0x8F, 0xA2, 0x07, 0xC9, 0x50, 0xBE, 0x9C, 0x6D}}; // bfb7ff88-7239-4fc9-8fa2-07c950be9c6d
+const GUID kIidSimpleAudioVolume = {0x87CE5498, 0x68D6, 0x44E5, {0x92, 0x15, 0x6D, 0xA4, 0x7E, 0xF8, 0x83, 0xD8}};    // 87ce5498-68d6-44e5-9215-6da47ef883d8
+
+// The game's own slider in the Windows mixer. Only sessions whose PID is exactly this process
+// count: the Electron host is a separate process with its own slider, which stays the user's.
+ISimpleAudioVolume* g_gameVolumes[8] = {};
+int g_gameVolumeCount = 0;
 
 constexpr wchar_t kTvHost[] = L"http://aisp.jp";
 constexpr wchar_t kLiveHost[] = L"http://live.nicovideo.jp/watch/";
@@ -475,11 +485,16 @@ DWORD WINAPI WatchdogThread(LPVOID)
         {
             if (logNow && g_logStats && stream->sessionActive)
                 LogStats(stream);
-            if (stream->sessionActive && stream->videoWritten == 0 && ticks % 30 == 0)
+            // ffmpeg sources increment videoWritten; the browser source sets liveReady.
+            if (stream->sessionActive && ticks % 30 == 0)
             {
-                char note[600] = {};
-                StringCchPrintfA(note, 600, "session %ls: %lu s without a frame (%ls)\r\n", stream->source, static_cast<unsigned long>((now - stream->sessionStarted) / 1000), stream->status);
-                LogLine(note);
+                const bool haveFrame = stream->liveVideo ? stream->liveReady : stream->videoWritten > 0;
+                if (!haveFrame)
+                {
+                    char note[600] = {};
+                    StringCchPrintfA(note, 600, "session %ls: %lu s without a frame (%ls)\r\n", stream->source, static_cast<unsigned long>((now - stream->sessionStarted) / 1000), stream->status);
+                    LogLine(note);
+                }
             }
             const ULONGLONG idle = now - stream->lastDraw;
             if (stream->sessionActive && idle > kIdleStopMs)
@@ -681,6 +696,234 @@ void UpdateRolloff(ScreenStream* stream, const float* listener, const float* for
     stream->panRight = sqrtf((1.0f + pan) * 0.5f) * 1.4142f;
 }
 
+void ReleaseGameVolumes()
+{
+    for (int i = 0; i < g_gameVolumeCount; ++i)
+    {
+        if (g_gameVolumes[i])
+            g_gameVolumes[i]->lpVtbl->Release(g_gameVolumes[i]);
+        g_gameVolumes[i] = nullptr;
+    }
+    g_gameVolumeCount = 0;
+}
+
+float ReadGameSessionGain()
+{
+    bool any = false;
+    bool muted = false;
+    float loudest = 0.0f;
+    char levels[160] = {};
+    for (int i = 0; i < g_gameVolumeCount; ++i)
+    {
+        ISimpleAudioVolume* volume = g_gameVolumes[i];
+        if (!volume)
+            continue;
+        float level = 1.0f;
+        BOOL mute = FALSE;
+        if (FAILED(volume->lpVtbl->GetMasterVolume(volume, &level)))
+            continue;
+        volume->lpVtbl->GetMute(volume, &mute);
+        any = true;
+        if (mute)
+            muted = true;
+        if (level > loudest)
+            loudest = level;
+        char one[32] = {};
+        StringCchPrintfA(one, 32, " %.3f%s", level, mute ? "(muted)" : "");
+        StringCchCatA(levels, 160, one);
+    }
+    float result = 1.0f;
+    if (!any)
+        result = 1.0f;
+    else if (muted)
+        result = 0.0f;
+    else
+        result = loudest < 0.0f ? 0.0f : (loudest > 1.0f ? 1.0f : loudest);
+
+    // One line the first time we read the game's slider, so a normal log shows whether the
+    // page-faded screens have anything to follow. Dragging the slider moves this every frame,
+    // so the rest is only for AISP_SCREEN_STATS=1.
+    static float logged = -1.0f;
+    if (logged < 0.0f || (g_logStats && (result < logged - 0.01f || result > logged + 0.01f)))
+    {
+        logged = result;
+        char line[224] = {};
+        StringCchPrintfA(line, 224, "game volume: %d session(s)%s -> %.3f\r\n", g_gameVolumeCount, any ? levels : " none readable", result);
+        LogLine(line);
+    }
+    return result;
+}
+
+// "...|...|<pid>": the trailing field of a session instance identifier. Some sessions report
+// no process id through GetProcessId even though the identifier carries one.
+DWORD PidFromSessionIdentifier(const wchar_t* id)
+{
+    if (!id || !id[0])
+        return 0;
+    const wchar_t* last = nullptr;
+    for (const wchar_t* bar = std::wcschr(id, L'|'); bar; bar = std::wcschr(bar + 1, L'|'))
+        last = bar + 1;
+    if (!last)
+        return 0;
+    const unsigned long pid = std::wcstoul(last, nullptr, 10);
+    return pid <= 0xFFFFFFFFul ? static_cast<DWORD>(pid) : 0;
+}
+
+// Every step of the game-session lookup used to fail silently, which reads downstream as a
+// screen that simply ignores the mixer. One line per site, the first time it happens.
+void LogGameVolumeBail(int site, const char* what, HRESULT hr)
+{
+    static bool logged[4] = {};
+    if (site < 0 || site >= 4 || logged[site])
+        return;
+    logged[site] = true;
+    char line[160] = {};
+    StringCchPrintfA(line, 160, "game volume: %s failed hr=0x%08lX\r\n", what, static_cast<unsigned long>(hr));
+    LogLine(line);
+}
+
+void StampGameVolumeRefresh(ScreenStream* stream)
+{
+    EnterCriticalSection(&stream->lock);
+    stream->gameVolumeRefresh = GetTickCount64();
+    LeaveCriticalSection(&stream->lock);
+}
+
+void RefreshGameVolumes(ScreenStream* stream)
+{
+    ISimpleAudioVolume* gameFound[8] = {};
+    int gameCount = 0;
+    IMMDeviceEnumerator* enumerator = nullptr;
+    IMMDevice* device = nullptr;
+    IAudioSessionManager2* manager = nullptr;
+    IAudioSessionEnumerator* sessions = nullptr;
+    HRESULT hr = CoCreateInstance(kClsidMMDeviceEnumerator, nullptr, CLSCTX_ALL, kIidMMDeviceEnumerator, reinterpret_cast<void**>(&enumerator));
+    if (FAILED(hr) || !enumerator)
+    {
+        LogGameVolumeBail(0, "CoCreateInstance(MMDeviceEnumerator)", hr);
+        StampGameVolumeRefresh(stream);
+        return;
+    }
+    hr = enumerator->lpVtbl->GetDefaultAudioEndpoint(enumerator, eRender, eConsole, &device);
+    if (FAILED(hr) || !device)
+    {
+        LogGameVolumeBail(1, "GetDefaultAudioEndpoint", hr);
+        enumerator->lpVtbl->Release(enumerator);
+        StampGameVolumeRefresh(stream);
+        return;
+    }
+    enumerator->lpVtbl->Release(enumerator);
+    hr = device->lpVtbl->Activate(device, kIidAudioSessionManager2, CLSCTX_ALL, nullptr, reinterpret_cast<void**>(&manager));
+    if (FAILED(hr) || !manager)
+    {
+        LogGameVolumeBail(2, "Activate(IAudioSessionManager2)", hr);
+        device->lpVtbl->Release(device);
+        StampGameVolumeRefresh(stream);
+        return;
+    }
+    device->lpVtbl->Release(device);
+    hr = manager->lpVtbl->GetSessionEnumerator(manager, &sessions);
+    if (FAILED(hr) || !sessions)
+    {
+        LogGameVolumeBail(3, "GetSessionEnumerator", hr);
+        manager->lpVtbl->Release(manager);
+        StampGameVolumeRefresh(stream);
+        return;
+    }
+    const DWORD gamePid = GetCurrentProcessId();
+    int count = 0;
+    sessions->lpVtbl->GetCount(sessions, &count);
+    for (int i = 0; i < count && gameCount < 8; ++i)
+    {
+        IAudioSessionControl* control = nullptr;
+        if (FAILED(sessions->lpVtbl->GetSession(sessions, i, &control)) || !control)
+            continue;
+        IAudioSessionControl2* control2 = nullptr;
+        DWORD pid = 0;
+        if (SUCCEEDED(control->lpVtbl->QueryInterface(control, kIidAudioSessionControl2, reinterpret_cast<void**>(&control2))) && control2)
+        {
+            if (FAILED(control2->lpVtbl->GetProcessId(control2, &pid)) || !pid)
+            {
+                wchar_t* ident = nullptr;
+                if (SUCCEEDED(control2->lpVtbl->GetSessionInstanceIdentifier(control2, &ident)) && ident)
+                {
+                    pid = PidFromSessionIdentifier(ident);
+                    CoTaskMemFree(ident);
+                }
+            }
+            if (control2->lpVtbl->IsSystemSoundsSession(control2) != S_OK && pid == gamePid)
+            {
+                AudioSessionState state = AudioSessionStateExpired;
+                control->lpVtbl->GetState(control, &state);
+                ISimpleAudioVolume* volume = nullptr;
+                if (state != AudioSessionStateExpired && SUCCEEDED(control->lpVtbl->QueryInterface(control, kIidSimpleAudioVolume, reinterpret_cast<void**>(&volume))) && volume)
+                    gameFound[gameCount++] = volume;
+            }
+            control2->lpVtbl->Release(control2);
+        }
+        control->lpVtbl->Release(control);
+    }
+    sessions->lpVtbl->Release(sessions);
+    bool viaDefaultSession = false;
+    if (gameCount == 0)
+    {
+        ISimpleAudioVolume* volume = nullptr;
+        if (SUCCEEDED(manager->lpVtbl->GetSimpleAudioVolume(manager, nullptr, FALSE, &volume)) && volume)
+        {
+            gameFound[gameCount++] = volume;
+            viaDefaultSession = true;
+        }
+    }
+    manager->lpVtbl->Release(manager);
+
+    const int previousGame = g_gameVolumeCount;
+    ReleaseGameVolumes();
+    for (int i = 0; i < gameCount; ++i)
+        g_gameVolumes[i] = gameFound[i];
+    g_gameVolumeCount = gameCount;
+    StampGameVolumeRefresh(stream);
+    if (gameCount != previousGame)
+    {
+        char line[192] = {};
+        StringCchPrintfA(line, 192, "game volume: %d of %d session(s) pid=%lu%s\r\n", gameCount, count, static_cast<unsigned long>(gamePid), viaDefaultSession ? " (process default session)" : "");
+        LogLine(line);
+    }
+}
+
+// electron: fades in the page. The gain is the screen's own volume, the distance rolloff and
+// the game's mixer session (so pulling the game down in the Windows mixer pulls the screens
+// down with it); the page-side scaler is in the browser host, not the OS mixer.
+void UpdateBrowserGain(ScreenStream* stream)
+{
+    EnterCriticalSection(&stream->lock);
+    const bool want = stream->liveVideo;
+    const bool held = GetTickCount64() - stream->lastDraw > kAudioHoldMs;
+    if (want)
+        stream->smoothGain += (stream->distanceGain - stream->smoothGain) * 0.2f;
+    // Audio can start before the first paint; do not wait on playing for the fader.
+    float gain = 0.0f;
+    if (want && !stream->paused && !held)
+        gain = GainOf(stream) * stream->smoothGain;
+    const ULONGLONG refreshed = stream->gameVolumeRefresh;
+    LeaveCriticalSection(&stream->lock);
+    if (!want)
+        return;
+
+    // COM enumeration on the draw thread: once a second, and only while a page-faded screen runs.
+    if (GetTickCount64() - refreshed > 1000ull)
+        RefreshGameVolumes(stream);
+
+    gain *= ReadGameSessionGain();
+    if (gain < 0.0f)
+        gain = 0.0f;
+    if (gain > 1.0f)
+        gain = 1.0f;
+
+    EnterCriticalSection(&stream->lock);
+    stream->pageGain = gain;
+    LeaveCriticalSection(&stream->lock);
+}
+
 DWORD WINAPI AudioRenderThread(LPVOID parameter)
 {
     ScreenStream* stream = static_cast<ScreenStream*>(parameter);
@@ -794,13 +1037,18 @@ void StopSession(ScreenStream* stream)
     // may be closing some of them, and whoever nulls a field owns it. Processes first, so a
     // source blocked reading ffmpeg's output sees the pipe close.
     HANDLE processes[2] = {};
+    HANDLE controlWrite = nullptr;
     EnterCriticalSection(&stream->lock);
     for (int i = 0; i < 2; ++i)
     {
         processes[i] = stream->processes[i];
         stream->processes[i] = nullptr;
     }
+    controlWrite = stream->controlWrite;
+    stream->controlWrite = nullptr;
     LeaveCriticalSection(&stream->lock);
+    if (controlWrite)
+        CloseHandle(controlWrite);
     for (HANDLE process : processes)
     {
         if (process)
@@ -871,8 +1119,12 @@ void FreeRings(ScreenStream* stream)
         stream->keyWidth = stream->keyHeight = 0;
     }
     delete[] stream->ring;
+    delete[] stream->liveFrame;
+    delete[] stream->livePresent;
     delete[] stream->audioRing;
     stream->ring = nullptr;
+    stream->liveFrame = stream->livePresent = nullptr;
+    stream->liveReady = false;
     stream->audioRing = nullptr;
     stream->videoWritten = stream->videoPos = 0;
     LeaveCriticalSection(&stream->lock);
@@ -890,14 +1142,34 @@ void StartSession(ScreenStream* stream)
     stream->audioActive = false;
     stream->titlePoll = 0;
     stream->underruns = stream->videoWaits = stream->videoDrops = stream->audioWaits = stream->audioDrops = 0;
-    if (!stream->ring)
+    stream->liveVideo = IsBrowserSource(stream->source);
+    stream->sentScroll[0] = stream->sentScroll[1] = 0x7FFFFFFF;
+    stream->sentScrollLock = -1;
+    stream->sentScale = -1.0f;
+    stream->sentMute = -1;
+    stream->gameVolumeRefresh = 0;
+    stream->sentPageGain = -1.0f;
+    // Start at the fade the screen already has, so a stream started from across the room does
+    // not open at full volume for the first frames.
+    stream->pageGain = stream->liveVideo ? GainOf(stream) * stream->distanceGain : 1.0f;
+    if (stream->liveVideo)
+    {
+        stream->capacity = RingCapacityFor(stream->frameBytes, stream->fps);
+        if (!stream->liveFrame)
+            stream->liveFrame = new BYTE[stream->frameBytes]();
+        if (!stream->livePresent)
+            stream->livePresent = new BYTE[stream->frameBytes]();
+        stream->liveReady = false;
+    }
+    else if (!stream->ring)
     {
         stream->capacity = RingCapacityFor(stream->frameBytes, stream->fps);
         stream->ring = new BYTE[static_cast<size_t>(stream->frameBytes) * static_cast<size_t>(stream->capacity)]();
     }
     LeaveCriticalSection(&stream->lock);
 
-    stream->audioWanted = PrepareAudio(stream);
+    // The browser source has no PCM tap (it fades in the page); only decoded sources mix here.
+    stream->audioWanted = !stream->liveVideo && PrepareAudio(stream);
     if (stream->audioWanted)
     {
         // Two seconds at least: a decoder's reordering depth puts audio well ahead of the first
@@ -920,6 +1192,7 @@ void StartSession(ScreenStream* stream)
     // Where the shared timeline says the video is right now (seeking sources honour it).
     stream->sessionStart = stream->pageStart;
     stream->sessionOffset = stream->pageOffset;
+    stream->sessionScale = stream->pageScale > 0 ? stream->pageScale : 1.0f;
     stream->seekSeconds = 0;
     if (stream->pageStart > 0)
     {
@@ -934,7 +1207,13 @@ void StartSession(ScreenStream* stream)
     char cropNote[64] = {};
     if (stream->crop[0] > 0)
         StringCchPrintfA(cropNote, 64, " crop=%dx%d+%d+%d", stream->crop[0], stream->crop[1], stream->crop[2], stream->crop[3]);
-    StringCchPrintfA(started, 600, "session start: %ls %dx%d @%d audio=%d seek=%.1f%s\r\n", stream->source, stream->videoWidth, stream->videoHeight, stream->fps, stream->audioWanted ? 1 : 0, stream->seekSeconds, cropNote);
+    char scrollNote[40] = {};
+    if (stream->pageScroll[0] || stream->pageScroll[1])
+        StringCchPrintfA(scrollNote, 40, " scroll=%d,%d", stream->pageScroll[0], stream->pageScroll[1]);
+    char scaleNote[24] = {};
+    if (stream->pageScale != 1.0f)
+        StringCchPrintfA(scaleNote, 24, " scale=%.3f", stream->pageScale);
+    StringCchPrintfA(started, 600, "session start: %ls %dx%d @%d audio=%d seek=%.1f%s%s%s\r\n", stream->source, stream->videoWidth, stream->videoHeight, stream->fps, stream->audioWanted ? 1 : 0, stream->seekSeconds, cropNote, scrollNote, scaleNote);
     LogLine(started);
     stream->thread = CreateThread(nullptr, 0, StreamThread, stream, 0, nullptr);
     if (!stream->thread)
@@ -1024,6 +1303,9 @@ void OnScreenNavigate(IWebBrowser2* browser, const wchar_t* url)
     stream->pageFps = 0;
     std::memset(stream->pageBox, 0, sizeof(stream->pageBox));
     std::memset(stream->pageCrop, 0, sizeof(stream->pageCrop));
+    stream->pageScroll[0] = stream->pageScroll[1] = 0;
+    stream->pageScrollLock = false;
+    stream->pageScale = stream->sessionScale = 1.0f;
     if (stream->html)
     {
         stream->html->lpVtbl->Release(stream->html);
@@ -1122,6 +1404,21 @@ void PollTitle(ScreenStream* stream)
         if (cropText && swscanf(cropText + 6, L"%d,%d,%d,%d", &crop[0], &crop[1], &crop[2], &crop[3]) == 4 && crop[0] > 0 && crop[1] > 0
             && crop[2] >= 0 && crop[3] >= 0 && crop[0] <= 4096 && crop[1] <= 4096)
             std::memcpy(stream->pageCrop, crop, sizeof(crop));
+        int scrollX = 0, scrollY = 0;
+        const wchar_t* scrollXText = std::wcsstr(title, L";scrollx=");
+        const wchar_t* scrollYText = std::wcsstr(title, L";scrolly=");
+        if (scrollXText)
+            swscanf(scrollXText + 9, L"%d", &scrollX);
+        if (scrollYText)
+            swscanf(scrollYText + 9, L"%d", &scrollY);
+        stream->pageScroll[0] = scrollX;
+        stream->pageScroll[1] = scrollY;
+        stream->pageScrollLock = scrollXText != nullptr || scrollYText != nullptr;
+        const wchar_t* scaleText = std::wcsstr(title, L";scale=");
+        double scale = 1;
+        stream->pageScale = (scaleText && swscanf(scaleText + 7, L"%lf", &scale) == 1 && scale >= 0.1 && scale <= 8.0)
+            ? static_cast<float>(scale)
+            : 1.0f;
     }
     if (const wchar_t* vol = std::wcsstr(title, L"vol="))
     {
@@ -1222,12 +1519,21 @@ HRESULT WINAPI HookOleDraw(LPUNKNOWN unknown, DWORD aspect, HDC hdc, LPCRECT bou
         && (wantedBox[0] != stream->videoX || wantedBox[1] != stream->videoY || wantedBox[2] != stream->videoWidth || wantedBox[3] != stream->videoHeight);
     const int wantedFps = stream->pageFps ? stream->pageFps : kDefaultFps;
     const bool fpsChanged = wantedFps != stream->fps;
-    // The crop is the session's: the source renders at that size, so a change restarts it.
-    const bool cropChanged = std::memcmp(stream->pageCrop, stream->crop, sizeof(stream->crop)) != 0;
+    // The crop is the session's: the source renders at that size, so a size change restarts it.
+    // Browser sources use the crop as the layout viewport; only sw/sh force a new host, the origin is live.
+    const bool browserSource = IsBrowserSource(wanted);
+    const bool cropChanged = browserSource
+        ? (stream->pageCrop[0] != stream->crop[0] || stream->pageCrop[1] != stream->crop[1])
+        : std::memcmp(stream->pageCrop, stream->crop, sizeof(stream->crop)) != 0;
+    // Browser scale is layout zoom; a new host is cheaper than fighting a live resize.
+    const bool scaleChanged = browserSource && stream->sessionActive
+        && (stream->pageScale < stream->sessionScale - 0.001f || stream->pageScale > stream->sessionScale + 0.001f);
     // A moved timeline (resume, seek) restarts the session at the new position; a pause only holds.
     const bool timelineChanged = stream->sessionActive && (stream->pageStart != stream->sessionStart || stream->pageOffset != stream->sessionOffset);
     stream->paused = stream->pagePausedAt > 0 || stream->pageHold;
-    const bool changed = std::wcscmp(wanted, stream->source) != 0 || boxChanged || fpsChanged || cropChanged || timelineChanged;
+    const bool changed = std::wcscmp(wanted, stream->source) != 0 || boxChanged || fpsChanged || cropChanged || timelineChanged || scaleChanged;
+    if (stream->sessionActive && stream->controlWrite)
+        SendBrowserControl(stream);
     LeaveCriticalSection(&stream->lock);
     if (changed)
     {
@@ -1278,11 +1584,28 @@ HRESULT WINAPI HookOleDraw(LPUNKNOWN unknown, DWORD aspect, HDC hdc, LPCRECT bou
         const bool have = ReadListener(listener, forward, right);
         UpdateRolloff(stream, listener, forward, right, have);
     }
+    LeaveCriticalSection(&stream->lock);
+    UpdateBrowserGain(stream);
+    EnterCriticalSection(&stream->lock);
+    if (stream->controlWrite)
+        SendBrowserControl(stream);
 
     // Pre-roll, then present: with audio, the frame that matches what the speaker has played;
     // without, one frame per interval on the performance counter. Underruns hold the last
     // frame (the audio thread clears `playing`); a full ring holds the reader instead.
+    // electron: has no video queue: blit the latest paint.
     const BYTE* shown = nullptr;
+    if (stream->liveVideo)
+    {
+        if (stream->liveReady && stream->livePresent)
+        {
+            if (!stream->paused)
+                std::memcpy(stream->livePresent, stream->liveFrame, stream->frameBytes);
+            shown = stream->livePresent;
+            stream->playing = true;
+        }
+    }
+    else
     {
         const LONGLONG queued = stream->videoWritten - stream->videoPos;
         const bool hasAudio = stream->audioActive;

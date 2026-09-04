@@ -104,6 +104,57 @@ bool CreateInheritablePipe(HANDLE* readEnd, HANDLE* writeEnd, bool inheritRead)
     return true;
 }
 
+HANDLE CreateNamedPipePair(wchar_t* name, size_t nameCount, const wchar_t* tag)
+{
+    static volatile LONG seq = 0;
+    StringCchPrintfW(name, nameCount, L"\\\\.\\pipe\\aisp.electron.%s.%u.%ld", tag, GetCurrentProcessId(), InterlockedIncrement(&seq));
+    // DUPLEX: Node's net.createConnection treats a named pipe as a socket and drops a one-way
+    // server before the first byte.
+    return CreateNamedPipeW(name, PIPE_ACCESS_DUPLEX | FILE_FLAG_FIRST_PIPE_INSTANCE, PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_NOWAIT, 1, 1 << 20, 1 << 20, 0, nullptr);
+}
+
+void PushLiveFrame(ScreenStream* stream, const BYTE* frame)
+{
+    EnterCriticalSection(&stream->lock);
+    if (stream->liveFrame && stream->frameBytes)
+        std::memcpy(stream->liveFrame, frame, stream->frameBytes);
+    stream->liveReady = true;
+    LeaveCriticalSection(&stream->lock);
+}
+
+void SendBrowserControl(ScreenStream* stream)
+{
+    if (!stream->controlWrite)
+        return;
+    const int hide = stream->pageScrollLock ? 1 : 0;
+    // The gain line is the fader; mute is the title mute plus a hard cut once the screen is
+    // effectively out of earshot, in case some page audio escapes the page-side scaler.
+    const int mute = stream->muted || (stream->rolloff && stream->distanceGain < 0.02f) ? 1 : 0;
+    DWORD written = 0;
+    if (stream->pageScroll[0] != stream->sentScroll[0] || stream->pageScroll[1] != stream->sentScroll[1]
+        || hide != stream->sentScrollLock || stream->pageScale != stream->sentScale || mute != stream->sentMute)
+    {
+        char line[128] = {};
+        StringCchPrintfA(line, 128, "scroll %d %d %d\nscale %.4f\nmute %d\n", stream->pageScroll[0], stream->pageScroll[1], hide, stream->pageScale > 0 ? stream->pageScale : 1.0f, mute);
+        WriteFile(stream->controlWrite, line, static_cast<DWORD>(std::strlen(line)), &written, nullptr);
+        stream->sentScroll[0] = stream->pageScroll[0];
+        stream->sentScroll[1] = stream->pageScroll[1];
+        stream->sentScrollLock = hide;
+        stream->sentScale = stream->pageScale;
+        stream->sentMute = mute;
+    }
+    // Its own deadband: walking towards a screen moves the gain every frame and the scroll and
+    // scale it is packed with do not change.
+    const float gain = stream->pageGain;
+    const float sent = stream->sentPageGain;
+    if (sent >= 0.0f && gain > sent - 0.002f && gain < sent + 0.002f)
+        return;
+    char line[32] = {};
+    StringCchPrintfA(line, 32, "gain %.4f\n", gain);
+    WriteFile(stream->controlWrite, line, static_cast<DWORD>(std::strlen(line)), &written, nullptr);
+    stream->sentPageGain = gain;
+}
+
 // Runs a tool to completion and returns its first stdout line (trimmed) in `out`.
 int RunToolForLines(wchar_t* commandLine, wchar_t* lines, size_t lineCount, int maxLines)
 {

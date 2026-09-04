@@ -48,3 +48,4 @@ docker run --rm \
         && chown \"$HOST_UID:$HOST_GID\" \"$OUTPUT_IN_CONTAINER\""
 
 echo "Built locale hook DLL: $OUTPUT"
+echo "Electron runtime for electron: sources: ./scripts/install-electron-runtime.sh."

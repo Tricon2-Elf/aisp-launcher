@@ -73,7 +73,12 @@ struct ScreenStream
     CRITICAL_SECTION lock;
 
     // Video ring: frame f lives at slot f % capacity for f in [videoPos, videoWritten).
+    // electron: skips this and keeps one latest frame (liveFrame); the presenter copies it to livePresent.
     BYTE* ring = nullptr;
+    BYTE* liveFrame = nullptr;
+    BYTE* livePresent = nullptr;
+    bool liveVideo = false;              // the browser source: blit the latest paint, no ffmpeg-style queue
+    bool liveReady = false;
     DWORD frameBytes = 0;
     int capacity = 0;
     LONGLONG videoWritten = 0;
@@ -89,6 +94,17 @@ struct ScreenStream
     // sw x sh instead of the box size and the box shows the window starting at cx,cy of it.
     int pageCrop[4] = {};
     int crop[4] = {};                    // the crop the running session was started with
+    // scrollx/scrolly from the page title: the off-screen browser document offset, in CSS
+    // pixels, inside its layout viewport (the crop size if given, else the box). Live.
+    int pageScroll[2] = {};
+    bool pageScrollLock = false;         // any scroll extra in the title: hide scrollbars and pin offset
+    float pageScale = 1.0f;              // scale= from the page title (browser zoom; 1 = 100%)
+    float sessionScale = 1.0f;           // scale the running browser session was started with
+    HANDLE controlWrite = nullptr;       // named pipe to a source process that takes live commands
+    int sentScroll[2] = {0x7FFFFFFF, 0x7FFFFFFF};
+    int sentScrollLock = -1;
+    float sentScale = -1.0f;
+    int sentMute = -1;
     // A video's shared timeline from the title: at start=<unix seconds> it was at offset=<s>
     // and playing; paused=<unix seconds> is when it stopped advancing. A source that can seek
     // starts at the position this implies (TimelinePosition); a change of start or offset
@@ -138,6 +154,12 @@ struct ScreenStream
     float smoothGain = 1.0f, smoothLeft = 1.0f, smoothRight = 1.0f; // eased in the render thread
     WAVEFORMATEX* mixFormat = nullptr;
     IAudioClient* audioClient = nullptr;
+    // electron: has no PCM tap, so its fader is a `gain` line on the control pipe: the host
+    // scales the page's media elements (and its AudioContext) instead of the Windows mixer,
+    // which belongs to the user. Gain is volume × distance × the game process mixer mute/volume.
+    float pageGain = 1.0f;
+    float sentPageGain = -1.0f;
+    ULONGLONG gameVolumeRefresh = 0;     // last enumeration of the game's own mixer session(s)
 
     // Lifetime: the client draws a screen every frame while it exists, so the last draw time is
     // the lifetime signal. Audio pauses at kAudioHoldMs, the session is torn down at kIdleStopMs
@@ -193,8 +215,15 @@ bool ReadFully(HANDLE pipe, BYTE* buffer, DWORD size, volatile LONG* stop);
 // session is stopping. A source writes frame f and then its samplesPerFrame samples, so the
 // presenter can pair them.
 bool PushVideoFrame(ScreenStream* stream, const BYTE* frame);
+void PushLiveFrame(ScreenStream* stream, const BYTE* frame);
 void CopyCropWindow(BYTE* out, int w, int h, const BYTE* picture, int pw, int ph, int cx, int cy);
 bool PushAudioSamples(ScreenStream* stream, const float* samples, UINT32 count);
+// Sends the live browser-host commands (scroll, scale, mute, gain) that changed since the last call.
+void SendBrowserControl(ScreenStream* stream);
+// Recomputes pageGain for the browser source; SendBrowserControl sends it when it moves.
+void UpdateBrowserGain(ScreenStream* stream);
+// A named pipe for the browser host, with its name in `name` for the host's command line.
+HANDLE CreateNamedPipePair(wchar_t* name, size_t nameCount, const wchar_t* tag);
 
 // Audio ring -> WASAPI (aisp.hook.cpp). A source with audio starts this thread once its samples
 // are on the way and sets audioActive so the presenter follows the device clock.
