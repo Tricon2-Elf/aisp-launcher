@@ -18,6 +18,7 @@
 
 #include "screen.h"
 #include "source.h"
+#include "tv_panel.h"
 
 namespace aisp
 {
@@ -1965,6 +1966,7 @@ BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID)
         InitScreenBase();
         PatchSingleImport(GetModuleHandleW(nullptr), "ole32.dll", "CoCreateInstance", reinterpret_cast<void*>(HookCoCreateInstance), &g_originalCoCreateInstance);
         PatchSingleImport(GetModuleHandleW(nullptr), "ole32.dll", "OleDraw", reinterpret_cast<void*>(HookOleDraw), &g_originalOleDraw);
+        PatchTvCommentButton();
     }
     return TRUE;
 }
