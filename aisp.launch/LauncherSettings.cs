@@ -19,9 +19,9 @@ public sealed class LauncherSettings
     public bool UseLocaleReplacer { get; set; } = true;
 
     /// <summary>
-    /// Enables the experimental CEF off-screen renderer for the game's AISP TV
+    /// Enables the experimental Electron off-screen renderer for the game's AISP TV
     /// surface. Trident remains available for the game's document/JavaScript
-    /// bridge; CEF replaces only the final texture pixels. Requires the built-in
+    /// bridge; Electron replaces only the final texture pixels. Requires the built-in
     /// locale hook.
     /// </summary>
     public bool EnableBrowserReplacementProofOfConcept { get; set; }
@@ -30,7 +30,7 @@ public sealed class LauncherSettings
     /// Twitch channel to bridge into the in-game Nico TV player.
     /// When set, Streamlink and FFmpeg are resolved or downloaded locally.
     /// </summary>
-    public string? TwitchChannel { get; set; } = "crelly247";
+    public string? TwitchChannel { get; set; }
 
     public string TwitchQuality { get; set; } = "480p";
 

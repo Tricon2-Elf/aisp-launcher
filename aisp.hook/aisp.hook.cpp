@@ -23,8 +23,8 @@ using MultiByteToWideChar_t = int(WINAPI*)(UINT, DWORD, LPCCH, int, LPWSTR, int)
 using WideCharToMultiByte_t = int(WINAPI*)(UINT, DWORD, LPCWCH, int, LPSTR, int, LPCCH, LPBOOL);
 using CreateWindowExW_t = HWND(WINAPI*)(DWORD, LPCWSTR, LPCWSTR, DWORD, int, int, int, int, HWND, HMENU, HINSTANCE, LPVOID);
 using OleDraw_t = HRESULT(WINAPI*)(IUnknown*, DWORD, HDC, LPCRECT);
-using StartCefRenderer_t = void(WINAPI*)(LPCWSTR, int, int);
-using DrawCefFrame_t = bool(WINAPI*)(HDC, const RECT*);
+using StartBrowserRenderer_t = void(WINAPI*)(LPCWSTR, int, int);
+using DrawBrowserFrame_t = bool(WINAPI*)(HDC, const RECT*);
 
 GetACP_t g_originalGetACP = nullptr;
 GetOEMCP_t g_originalGetOEMCP = nullptr;
@@ -37,12 +37,12 @@ MultiByteToWideChar_t g_originalMultiByteToWideChar = nullptr;
 WideCharToMultiByte_t g_originalWideCharToMultiByte = nullptr;
 CreateWindowExW_t g_originalCreateWindowExW = nullptr;
 OleDraw_t g_originalOleDraw = nullptr;
-StartCefRenderer_t g_startCefRenderer = nullptr;
-DrawCefFrame_t g_drawCefFrame = nullptr;
-HMODULE g_cefRendererModule = nullptr;
+StartBrowserRenderer_t g_startBrowserRenderer = nullptr;
+DrawBrowserFrame_t g_drawBrowserFrame = nullptr;
+HMODULE g_browserRendererModule = nullptr;
 bool g_browserReplacementPocEnabled = false;
-LONG g_loggedCefDrawFallback = 0;
-LONG g_loggedCefDrawSuccess = 0;
+LONG g_loggedBrowserDrawFallback = 0;
+LONG g_loggedBrowserDrawSuccess = 0;
 HWND g_gameWindow = nullptr;
 RECT g_gameWindowRect = {};
 wchar_t g_gameWindowTitle[256] = {};
@@ -183,23 +183,23 @@ void RestoreGameWindowState()
     );
 }
 
-bool EnsureCefRendererLoaded()
+bool EnsureBrowserRendererLoaded()
 {
-    if (g_cefRendererModule)
-        return g_startCefRenderer && g_drawCefFrame;
+    if (g_browserRendererModule)
+        return g_startBrowserRenderer && g_drawBrowserFrame;
 
     wchar_t path[MAX_PATH] = {};
     const DWORD length = GetModuleFileNameW(nullptr, path, MAX_PATH);
     if (length == 0 || length >= MAX_PATH)
     {
-        WriteBrowserPocTraceLine(L"CEF plugin: unable to resolve game directory\r\n");
+        WriteBrowserPocTraceLine(L"Electron renderer: unable to resolve game directory\r\n");
         return false;
     }
 
     wchar_t* fileName = std::wcsrchr(path, L'\\');
     if (!fileName)
     {
-        WriteBrowserPocTraceLine(L"CEF plugin: game path has no directory\r\n");
+        WriteBrowserPocTraceLine(L"Electron renderer: game path has no directory\r\n");
         return false;
     }
     *fileName = L'\0';
@@ -207,36 +207,36 @@ bool EnsureCefRendererLoaded()
     wchar_t runtimeDirectory[MAX_PATH] = {};
     wchar_t rendererPath[MAX_PATH] = {};
     if (
-        FAILED(StringCchPrintfW(runtimeDirectory, _countof(runtimeDirectory), L"%s\\aisp.cef", path))
-        || FAILED(StringCchPrintfW(rendererPath, _countof(rendererPath), L"%s\\aisp.cef-renderer.dll", runtimeDirectory))
+        FAILED(StringCchPrintfW(runtimeDirectory, _countof(runtimeDirectory), L"%s\\aisp.electron", path))
+        || FAILED(StringCchPrintfW(rendererPath, _countof(rendererPath), L"%s\\aisp.electron-renderer.dll", runtimeDirectory))
     )
     {
-        WriteBrowserPocTraceLine(L"CEF plugin: runtime path is too long\r\n");
+        WriteBrowserPocTraceLine(L"Electron renderer: runtime path is too long\r\n");
         return false;
     }
 
     SetDllDirectoryW(runtimeDirectory);
-    g_cefRendererModule = LoadLibraryW(rendererPath);
-    if (!g_cefRendererModule)
+    g_browserRendererModule = LoadLibraryW(rendererPath);
+    if (!g_browserRendererModule)
     {
         wchar_t line[128] = {};
-        StringCchPrintfW(line, _countof(line), L"CEF plugin: LoadLibraryW failed (%lu)\r\n", GetLastError());
+        StringCchPrintfW(line, _countof(line), L"Electron renderer: LoadLibraryW failed (%lu)\r\n", GetLastError());
         WriteBrowserPocTraceLine(line);
         return false;
     }
 
-    // The CEF renderer is a 32-bit WINAPI DLL. MinGW exports stdcall symbols
+    // The renderer is a 32-bit WINAPI DLL. MinGW exports stdcall symbols
     // with their argument-byte suffix, so resolve those exact names rather
     // than the undecorated C++ source identifiers.
-    g_startCefRenderer = reinterpret_cast<StartCefRenderer_t>(GetProcAddress(g_cefRendererModule, "StartCefRenderer@12"));
-    g_drawCefFrame = reinterpret_cast<DrawCefFrame_t>(GetProcAddress(g_cefRendererModule, "DrawCefFrame@8"));
-    if (g_startCefRenderer && g_drawCefFrame)
+    g_startBrowserRenderer = reinterpret_cast<StartBrowserRenderer_t>(GetProcAddress(g_browserRendererModule, "StartBrowserRenderer@12"));
+    g_drawBrowserFrame = reinterpret_cast<DrawBrowserFrame_t>(GetProcAddress(g_browserRendererModule, "DrawBrowserFrame@8"));
+    if (g_startBrowserRenderer && g_drawBrowserFrame)
     {
-        WriteBrowserPocTraceLine(L"CEF plugin: loaded\r\n");
+        WriteBrowserPocTraceLine(L"Electron renderer: loaded\r\n");
         return true;
     }
 
-    WriteBrowserPocTraceLine(L"CEF plugin: required exports are missing\r\n");
+    WriteBrowserPocTraceLine(L"Electron renderer: required exports are missing\r\n");
     return false;
 }
 
@@ -264,10 +264,10 @@ HWND WINAPI HookCreateWindowExW(
         OutputDebugStringW(windowName ? windowName : L"(null)");
         OutputDebugStringW(L"\n");
         WriteBrowserPocTrace(windowName);
-        if (IsLocalNicoPlayerUrl(windowName) && EnsureCefRendererLoaded())
+        if (IsLocalNicoPlayerUrl(windowName) && EnsureBrowserRendererLoaded())
         {
             CaptureGameWindowState(parent);
-            g_startCefRenderer(windowName, width, height);
+            g_startBrowserRenderer(windowName, width, height);
             RestoreGameWindowState();
         }
     }
@@ -294,21 +294,21 @@ HRESULT WINAPI HookOleDraw(IUnknown* unknown, DWORD aspect, HDC destination, LPC
 {
     // Trident is retained for the document and JavaScript bridge the client
     // already uses. Only its final draw into the game-owned TV bitmap is
-    // replaced with CEF's off-screen BGRA frame.
-    if (aspect == DVASPECT_CONTENT && g_drawCefFrame)
+    // replaced with Electron's off-screen BGRA frame.
+    if (aspect == DVASPECT_CONTENT && g_drawBrowserFrame)
     {
-        if (g_drawCefFrame(destination, destinationRect))
+        if (g_drawBrowserFrame(destination, destinationRect))
         {
-            if (InterlockedCompareExchange(&g_loggedCefDrawSuccess, 1, 0) == 0)
+            if (InterlockedCompareExchange(&g_loggedBrowserDrawSuccess, 1, 0) == 0)
             {
                 RestoreGameWindowState();
-                WriteBrowserPocTraceLine(L"CEF texture: first frame drawn\r\n");
+                WriteBrowserPocTraceLine(L"Electron texture: first frame drawn\r\n");
             }
             return S_OK;
         }
 
-        if (InterlockedCompareExchange(&g_loggedCefDrawFallback, 1, 0) == 0)
-            WriteBrowserPocTraceLine(L"CEF texture: no frame available; using Trident fallback\r\n");
+        if (InterlockedCompareExchange(&g_loggedBrowserDrawFallback, 1, 0) == 0)
+            WriteBrowserPocTraceLine(L"Electron texture: no frame available; using Trident fallback\r\n");
     }
 
     return g_originalOleDraw ? g_originalOleDraw(unknown, aspect, destination, destinationRect) : E_FAIL;
