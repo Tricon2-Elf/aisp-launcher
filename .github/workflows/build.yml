@@ -12,6 +12,24 @@ permissions:
   contents: read
 
 jobs:
+  build-hook:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # The same containerised MinGW build the release script uses; MSVC does not compile the
+      # hook (its exdisp.h breaks under CINTERFACE in C++), so the DLL is built here and the
+      # Windows job only publishes the launcher.
+      - name: Build hook DLL (x86, MinGW)
+        run: ./scripts/build-hook.sh build/aisp.hook.dll
+
+      - name: Upload hook DLL
+        uses: actions/upload-artifact@v4
+        with:
+          name: hook-win-x86
+          path: build/aisp.hook.dll
+
   build-windows:
     runs-on: windows-latest
     steps:
@@ -28,14 +46,3 @@ jobs:
           dotnet publish aisp.launch/aisp.launch.csproj
           -c Release
           -p:PublishProfile=win-x86
-
-      - name: Setup MSVC x86 toolchain
-        uses: ilammy/msvc-dev-cmd@v1
-        with:
-          arch: x86
-
-      - name: Build hook DLL (x86)
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Path aisp.launch/bin/publish/win-x86 -Force | Out-Null
-          cl /nologo /LD /O2 /EHsc aisp.hook/aisp.hook.cpp /link /OUT:aisp.launch/bin/publish/win-x86/aisp.hook.dll
