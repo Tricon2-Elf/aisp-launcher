@@ -40,8 +40,25 @@ jobs:
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "CalVer: $version (tag: $tag)"
 
+  build-hook:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # The same containerised MinGW build the release script uses; MSVC does not compile the
+      # hook (its exdisp.h breaks under CINTERFACE in C++).
+      - name: Build hook DLL (x86, MinGW)
+        run: ./scripts/build-hook.sh build/aisp.hook.dll
+
+      - name: Upload hook DLL
+        uses: actions/upload-artifact@v4
+        with:
+          name: hook-win-x86
+          path: build/aisp.hook.dll
+
   build-windows:
-    needs: calver
+    needs: [calver, build-hook]
     runs-on: windows-latest
     steps:
       - name: Checkout repository
@@ -60,15 +77,11 @@ jobs:
           -p:InformationalVersion=${{ needs.calver.outputs.version }}
           -p:Version=${{ needs.calver.outputs.version }}
 
-      - name: Setup MSVC x86 toolchain
-        uses: ilammy/msvc-dev-cmd@v1
+      - name: Download hook DLL
+        uses: actions/download-artifact@v4
         with:
-          arch: x86
-
-      - name: Build built-in locale hook DLL (x86)
-        shell: pwsh
-        run: |
-          cl /nologo /LD /O2 /EHsc aisp.hook/aisp.hook.cpp /link /OUT:aisp.launch/bin/publish/win-x86/aisp.hook.dll
+          name: hook-win-x86
+          path: aisp.launch/bin/publish/win-x86
 
       - name: Package win-x86 launcher bundle
         shell: pwsh
@@ -95,7 +108,8 @@ jobs:
       - name: Download artifacts
         uses: actions/download-artifact@v4
         with:
-          path: dist
+          name: launcher-win-x86
+          path: dist/launcher-win-x86
 
       - name: Prepare release assets
         env:
