@@ -157,6 +157,8 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="aisp.hook.cpp" />
+    <ClCompile Include="browser.cpp" />
+    <ClCompile Include="document.cpp" />
     <ClCompile Include="screen.cpp" />
     <ClCompile Include="source.cpp" />
     <ClCompile Include="source_electron.cpp" />
@@ -167,6 +169,9 @@
     <ClCompile Include="config.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="browser.h" />
+    <ClInclude Include="document.h" />
+    <None Include="fake_vtables.inc" />
     <ClInclude Include="screen.h" />
     <ClInclude Include="source.h" />
     <ClInclude Include="tv_panel.h" />

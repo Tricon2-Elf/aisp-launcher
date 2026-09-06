@@ -1,6 +1,7 @@
 // Shared screen state and helpers; see screen.h.
 #include "screen.h"
 #include "config.h"
+#include "browser.h"
 
 #include <strsafe.h>
 #include <cmath>
@@ -137,6 +138,23 @@ HANDLE CreateNamedPipePair(wchar_t* name, size_t nameCount, const wchar_t* tag)
     return CreateNamedPipeW(name, PIPE_ACCESS_DUPLEX | FILE_FLAG_FIRST_PIPE_INSTANCE, PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_NOWAIT, 1, 1 << 20, 1 << 20, 0, nullptr);
 }
 
+bool ConnectNamedPipeWait(HANDLE pipe, volatile LONG* stop, int tries)
+{
+    for (int i = 0; i < tries; ++i)
+    {
+        if (stop && *stop)
+            return false;
+        if (ConnectNamedPipe(pipe, nullptr) || GetLastError() == ERROR_PIPE_CONNECTED)
+        {
+            DWORD mode = PIPE_READMODE_BYTE | PIPE_WAIT;
+            SetNamedPipeHandleState(pipe, &mode, nullptr, nullptr);
+            return true;
+        }
+        Sleep(50);
+    }
+    return false;
+}
+
 void PushLiveFrame(ScreenStream* stream, const BYTE* frame)
 {
     EnterCriticalSection(&stream->lock);
@@ -148,35 +166,38 @@ void PushLiveFrame(ScreenStream* stream, const BYTE* frame)
 
 void SendBrowserControl(ScreenStream* stream)
 {
-    if (!stream->controlWrite)
-        return;
-    const int hide = stream->pageScrollLock ? 1 : 0;
-    // The gain line is the fader; mute is the title mute plus a hard cut once the screen is
-    // effectively out of earshot, in case some page audio escapes the page-side scaler.
-    const int mute = stream->muted || (stream->rolloff && stream->distanceGain < 0.02f) ? 1 : 0;
-    DWORD written = 0;
-    if (stream->pageScroll[0] != stream->sentScroll[0] || stream->pageScroll[1] != stream->sentScroll[1]
-        || hide != stream->sentScrollLock || stream->pageScale != stream->sentScale || mute != stream->sentMute)
+    if (stream->controlWrite)
     {
-        char line[128] = {};
-        StringCchPrintfA(line, 128, "scroll %d %d %d\nscale %.4f\nmute %d\n", stream->pageScroll[0], stream->pageScroll[1], hide, stream->pageScale > 0 ? stream->pageScale : 1.0f, mute);
-        WriteFile(stream->controlWrite, line, static_cast<DWORD>(std::strlen(line)), &written, nullptr);
-        stream->sentScroll[0] = stream->pageScroll[0];
-        stream->sentScroll[1] = stream->pageScroll[1];
-        stream->sentScrollLock = hide;
-        stream->sentScale = stream->pageScale;
-        stream->sentMute = mute;
+        const int hide = stream->pageScrollLock ? 1 : 0;
+        // The gain line is the fader; mute is the title mute plus a hard cut once the screen is
+        // effectively out of earshot, in case some page audio escapes the page-side scaler.
+        const int mute = stream->muted || (stream->rolloff && stream->distanceGain < 0.02f) ? 1 : 0;
+        DWORD written = 0;
+        if (stream->pageScroll[0] != stream->sentScroll[0] || stream->pageScroll[1] != stream->sentScroll[1]
+            || hide != stream->sentScrollLock || stream->pageScale != stream->sentScale || mute != stream->sentMute)
+        {
+            char line[128] = {};
+            StringCchPrintfA(line, 128, "scroll %d %d %d\nscale %.4f\nmute %d\n", stream->pageScroll[0], stream->pageScroll[1], hide, stream->pageScale > 0 ? stream->pageScale : 1.0f, mute);
+            WriteFile(stream->controlWrite, line, static_cast<DWORD>(std::strlen(line)), &written, nullptr);
+            stream->sentScroll[0] = stream->pageScroll[0];
+            stream->sentScroll[1] = stream->pageScroll[1];
+            stream->sentScrollLock = hide;
+            stream->sentScale = stream->pageScale;
+            stream->sentMute = mute;
+        }
+        // Its own deadband: walking towards a screen moves the gain every frame and the scroll and
+        // scale it is packed with do not change.
+        const float gain = stream->pageGain;
+        const float sent = stream->sentPageGain;
+        if (sent < 0.0f || gain <= sent - 0.002f || gain >= sent + 0.002f)
+        {
+            char line[32] = {};
+            StringCchPrintfA(line, 32, "gain %.4f\n", gain);
+            WriteFile(stream->controlWrite, line, static_cast<DWORD>(std::strlen(line)), &written, nullptr);
+            stream->sentPageGain = gain;
+        }
     }
-    // Its own deadband: walking towards a screen moves the gain every frame and the scroll and
-    // scale it is packed with do not change.
-    const float gain = stream->pageGain;
-    const float sent = stream->sentPageGain;
-    if (sent >= 0.0f && gain > sent - 0.002f && gain < sent + 0.002f)
-        return;
-    char line[32] = {};
-    StringCchPrintfA(line, 32, "gain %.4f\n", gain);
-    WriteFile(stream->controlWrite, line, static_cast<DWORD>(std::strlen(line)), &written, nullptr);
-    stream->sentPageGain = gain;
+    SendPrimaryControl(stream);
 }
 
 // Runs a tool to completion and returns its first stdout line (trimmed) in `out`.

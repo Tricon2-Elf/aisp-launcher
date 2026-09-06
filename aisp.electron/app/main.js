@@ -1,6 +1,8 @@
-// Off-screen Electron host for electron:<url> screens: the crop is the layout viewport, with
-// scroll/scale/hide and mute as live extras. Raw BGRA of --width x --height on the named
-// --video pipe (latest-frame; drop if blocked) because Chromium helpers inherit stdout.
+// Off-screen Electron host for the in-game screens: the electron:<url> video sources and, with
+// --framed=1, the primary browser that is the screen page itself (frames, document.title and
+// script call replies on --video; eval/call on --control). The crop is the layout viewport, with
+// scroll/scale/hide and mute as live extras. BGRA of --width x --height on the --video channel
+// (latest-frame; drop if blocked) because Chromium helpers inherit stdout.
 // --control takes scroll/scale/hide/mute/gain. There is no PCM tap: mute is
 // webContents.setAudioMuted, and gain is applied inside the page -- the volume/rolloff fader
 // scales every media element (through the prototype accessor, so the site's own slider still
@@ -68,6 +70,14 @@ const frameBytes = width * height * 4;
 const url = argValue("--url", "");
 const controlName = argValue("--control", "");
 const videoName = argValue("--video", "");
+// --framed=1: the video channel carries 8-byte-headed messages (type, length): 1 = a BGRA
+// frame, 2 = a UTF-8 text line (title …, ret <id> <json>, err <id> <text>). Without it the
+// channel is bare frames, as the secondary electron: sources read it.
+const framed = argInt("--framed", 0) ? 1 : 0;
+// The channel protocol the hook expects; bump both sides together when the format changes. The
+// app announces itself as the first framed message so a stale copy shows up in aisp.screen.log.
+const PROTOCOL = 2;
+const APP_VERSION = `aisp.electron app 2026-09-07b (protocol ${PROTOCOL})`;
 
 const state = {
   scrollx: argInt("--scrollx", 0),
@@ -112,6 +122,46 @@ let applyTimer;
 let gainTimer;
 let volumeTimer;
 
+function framedMessage(type, payload) {
+  const header = Buffer.alloc(8);
+  header.writeUInt32LE(type, 0);
+  header.writeUInt32LE(payload.length, 4);
+  return Buffer.concat([header, payload]);
+}
+
+// Text to the hook, in order with the frames. Never dropped: the socket queues it.
+function sendText(text) {
+  const sink = videoSocket && !videoSocket.destroyed ? videoSocket : null;
+  if (!sink || !framed)
+    return;
+  sink.write(framedMessage(2, Buffer.from(String(text).replace(/[\r\n]/g, " "), "utf8")));
+}
+
+function sendTitle(title) {
+  if (title != null)
+    sendText(`title ${title}`);
+}
+
+// call <id> <js>: evaluate in the page, answer with the JSON of the value.
+// executeJavaScript is held back until the page has finished loading, and the hook's caller
+// (the game thread) would sit on it for its whole timeout: while the main frame loads, a call
+// is answered at once with `loading`, which the hook reads as "nothing there yet".
+let pageLoading = true;
+
+function callScript(id, code) {
+  if (!browserWindow || browserWindow.isDestroyed()) {
+    sendText(`err ${id} no window`);
+    return;
+  }
+  if (pageLoading) {
+    sendText(`err ${id} loading`);
+    return;
+  }
+  browserWindow.webContents.executeJavaScript(code)
+    .then((value) => sendText(`ret ${id} ${JSON.stringify(value === undefined ? null : value)}`))
+    .catch((error) => sendText(`err ${id} ${String((error && error.message) || error)}`));
+}
+
 function writeLatest(frame) {
   const sink = videoSocket && !videoSocket.destroyed ? videoSocket : null;
   if (!sink) {
@@ -122,7 +172,7 @@ function writeLatest(frame) {
     pendingFrame = frame;
     return;
   }
-  blocked = !sink.write(frame);
+  blocked = !sink.write(framed ? framedMessage(1, frame) : frame);
 }
 
 function bitmapOf(image) {
@@ -294,6 +344,16 @@ function applyLine(line) {
     scheduleApply();
     return;
   }
+  if (line.startsWith("eval ")) {
+    if (browserWindow && !browserWindow.isDestroyed())
+      browserWindow.webContents.executeJavaScript(line.slice(5)).catch((error) => logOnce(`eval: ${error.message}`));
+    return;
+  }
+  const call = /^call (\S+) ([\s\S]*)$/.exec(line);
+  if (call) {
+    callScript(call[1], call[2]);
+    return;
+  }
   const gain = /^gain\s+([0-9.]+)/.exec(line);
   if (gain) {
     const value = Number.parseFloat(gain[1]);
@@ -310,6 +370,10 @@ function connectPipe(name, label, onData) {
   const socket = net.createConnection({ path: name, allowHalfOpen: true });
   socket.once("connect", () => {
     log(`${label} pipe connected`);
+    if (label === "video" && framed) {
+      log(APP_VERSION);
+      socket.write(framedMessage(2, Buffer.from(`hello ${APP_VERSION}`, "utf8")));
+    }
     if (label === "video" && pendingFrame) {
       const frame = pendingFrame;
       pendingFrame = undefined;
@@ -405,17 +469,26 @@ app.whenReady().then(() => {
     if (bitmap)
       writeLatest(bitmap);
   });
+  contents.on("did-start-navigation", (_event, _navUrl, isInPlace, isMainFrame) => {
+    if (isMainFrame && !isInPlace)
+      pageLoading = true;
+  });
   contents.on("did-finish-load", () => {
+    pageLoading = false;
     applyView();
+    sendTitle(browserWindow.getTitle());
     log(`loaded ${url}`);
   });
+  contents.on("page-title-updated", (_event, title) => sendTitle(title));
   contents.on("did-navigate", () => scheduleApply());
   contents.on("did-frame-navigate", () => installVolume());
   contents.on("dom-ready", () => installVolume());
   volumeTimer = setInterval(installVolume, 500);
-  contents.on("did-fail-load", (_event, code, description, failedUrl) =>
-    log(`load failed ${code}: ${description} (${failedUrl})`)
-  );
+  contents.on("did-fail-load", (_event, code, description, failedUrl, isMainFrame) => {
+    if (isMainFrame)
+      pageLoading = false;
+    log(`load failed ${code}: ${description} (${failedUrl})`);
+  });
   contents.on("render-process-gone", (_event, details) =>
     log(`renderer exited: ${details.reason}`)
   );

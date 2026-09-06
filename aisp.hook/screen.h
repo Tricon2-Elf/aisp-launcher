@@ -105,6 +105,46 @@ struct ScreenStream
     int sentScrollLock = -1;
     float sentScale = -1.0f;
     int sentMute = -1;
+    // Primary Electron (optional): paints the screen page, reports its title and answers the
+    // client's page reads (document.cpp), so ieframe neither draws nor navigates. Secondary
+    // electron:/ffmpeg still composites.
+    wchar_t pageUrl[4096] = {};          // rewritten screen URL this control navigated to
+    wchar_t electronTitle[1024] = {};    // latest document.title from the primary host
+    bool electronTitleNew = false;       // set by the video thread, cleared when applied
+    // The page is laid out from the control's origin and the crop sits at (x, y) in it, so
+    // the primary renders (x + width) x (y + height) and the blit takes the crop out of that.
+    int pageViewWidth = 0, pageViewHeight = 0;
+    BYTE* pageFrame = nullptr;           // latest primary paint, view-sized
+    BYTE* pagePresent = nullptr;         // the crop of it being shown, width x height
+    bool pageReady = false;
+    DWORD pageBytes = 0;                 // of pageFrame
+    DWORD pagePresentBytes = 0;
+    HANDLE primaryProcess = nullptr;
+    HANDLE primaryControl = nullptr;
+    HANDLE primaryVideo = nullptr;      // framed: frames, title lines and call replies
+    HANDLE primaryThread = nullptr;
+    bool primaryActive = false;
+    // One script call in flight at a time (CallPrimary, main thread); the video thread
+    // completes it. The client's page reads are answered through this.
+    HANDLE primaryCallEvent = nullptr;
+    DWORD primaryCallId = 0;
+    DWORD primaryCallDone = 0;
+    bool primaryCallOk = false;
+    bool primaryCallLoading = false;     // the host answered `loading`: the page is not there yet
+    char primaryCallResult[16384] = {};
+    // [screens] stats: what the client's page reads cost through Electron, per log interval.
+    DWORD primaryReadsStatus = 0;        // getElementById("statusForm")
+    DWORD primaryReadsOther = 0;         // every other id (the retX getters)
+    DWORD primaryEvals = 0;              // execScript forwarded
+    DWORD primaryReadsFailed = 0;        // timed out or no value
+    double primaryWaitMs = 0;            // game thread time spent waiting for replies
+    double primaryWaitMaxMs = 0;
+    ULONGLONG primaryStatsAt = 0;
+    void* syntheticDocument = nullptr;   // document.cpp: what get_Document hands the client in primary mode
+    volatile LONG primaryStop = 0;
+    int sentPrimaryMute = -1;
+    float sentPrimaryGain = -1.0f;
+    ULONGLONG primaryRetryAt = 0;        // tick after which a failed start may be tried again
     // A video's shared timeline from the title: at start=<unix seconds> it was at offset=<s>
     // and playing; paused=<unix seconds> is when it stopped advancing. A source that can seek
     // starts at the position this implies (TimelinePosition); a change of start or offset
@@ -227,6 +267,7 @@ void SendBrowserControl(ScreenStream* stream);
 void UpdateBrowserGain(ScreenStream* stream);
 // A named pipe for the browser host, with its name in `name` for the host's command line.
 HANDLE CreateNamedPipePair(wchar_t* name, size_t nameCount, const wchar_t* tag);
+bool ConnectNamedPipeWait(HANDLE pipe, volatile LONG* stop, int tries = 160);
 
 // Audio ring -> WASAPI (aisp.hook.cpp). A source with audio starts this thread once its samples
 // are on the way and sets audioActive so the presenter follows the device clock.

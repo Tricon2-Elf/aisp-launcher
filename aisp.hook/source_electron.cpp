@@ -1,11 +1,12 @@
 // Off-screen browser host: electron:<http(s) url> runs aisp.electron\electron.exe with the app
-// in aisp.electron\app (stock Chromium, H.264 included) in a separate process. It paints raw
-// BGRA of the layout viewport on a named video pipe (latest frame; the hook blits the newest)
-// and takes live scroll, scale, mute and gain lines on a named control pipe. Chromium helpers
-// inherit stdin and stdout, so neither is used. There is no PCM tap: the hook sends a `gain`
-// line (volume × distance × the game mixer mute/volume) and the host scales the page's own
-// media elements, so the Windows mixer slider of the host stays the user's.
+// in aisp.electron\app (stock Chromium, H.264 included) in a separate process, through the
+// session helper shared with the primary browser (browser.cpp). It paints raw BGRA of the
+// layout viewport on a named video pipe (latest frame; the hook blits the newest) and takes
+// live scroll, scale, mute and gain lines on a named control pipe. There is no PCM tap: the
+// hook sends a `gain` line (volume x distance x the game mixer mute/volume) and the host scales
+// the page's own media elements, so the Windows mixer slider of the host stays the user's.
 #include "source.h"
+#include "browser.h"
 
 #include <strsafe.h>
 #include <cstring>
@@ -13,53 +14,11 @@
 
 namespace aisp
 {
-namespace
-{
-bool ConnectPipe(HANDLE pipe, int tries = 160)
-{
-    for (int i = 0; i < tries; ++i)
-    {
-        if (ConnectNamedPipe(pipe, nullptr) || GetLastError() == ERROR_PIPE_CONNECTED)
-        {
-            DWORD mode = PIPE_READMODE_BYTE | PIPE_WAIT;
-            SetNamedPipeHandleState(pipe, &mode, nullptr, nullptr);
-            return true;
-        }
-        Sleep(50);
-    }
-    return false;
-}
-} // namespace
-
 // aisp.electron\electron.exe next to the game ([tools] electron or AISP_ELECTRON overrides), with the app folder
 // beside it.
 DWORD RunElectronSource(ScreenStream* stream)
 {
-    wchar_t browser[MAX_PATH] = {};
-    wchar_t appPath[MAX_PATH] = {};
     wchar_t message[512] = {};
-    if (!ToolPath(L"AISP_ELECTRON", L"electron", L"aisp.electron\\electron.exe", browser, MAX_PATH))
-    {
-        StringCchPrintfW(message, 512, L"browser host not found: %s", browser);
-        SetStatus(stream, message);
-        return 0;
-    }
-    StringCchCopyW(appPath, MAX_PATH, browser);
-    wchar_t* slash = std::wcsrchr(appPath, L'\\');
-    if (!slash)
-    {
-        SetStatus(stream, L"browser: host path has no directory");
-        return 0;
-    }
-    slash[1] = 0;
-    StringCchCatW(appPath, MAX_PATH, L"app");
-    if (GetFileAttributesW(appPath) == INVALID_FILE_ATTRIBUTES)
-    {
-        StringCchPrintfW(message, 512, L"browser app not found: %s", appPath);
-        SetStatus(stream, message);
-        return 0;
-    }
-
     const wchar_t* url = stream->source + 9;
     if (_wcsnicmp(url, L"http://", 7) != 0 && _wcsnicmp(url, L"https://", 8) != 0)
     {
@@ -82,54 +41,26 @@ DWORD RunElectronSource(ScreenStream* stream)
     StringCchPrintfW(message, 512, L"browser: %s view %dx%d box %dx%d scroll %d,%d scale %.3f", url, viewW, viewH, boxW, boxH, scrollX, scrollY, scale);
     SetStatus(stream, message);
 
-    wchar_t controlName[128] = {}, videoName[128] = {};
-    HANDLE controlPipe = CreateNamedPipePair(controlName, 128, L"ctl");
-    HANDLE videoPipe = CreateNamedPipePair(videoName, 128, L"vid");
-    if (controlPipe == INVALID_HANDLE_VALUE || videoPipe == INVALID_HANDLE_VALUE)
+    HANDLE controlPipe = nullptr, videoPipe = nullptr, process = nullptr;
+    ElectronSessionRequest request;
+    request.url = url;
+    request.width = viewW;
+    request.height = viewH;
+    request.fps = fps > 0 ? fps : kDefaultFps;
+    request.scrollx = scrollX;
+    request.scrolly = scrollY;
+    request.hideScroll = hideScroll;
+    request.scale = scale;
+    request.mute = mute;
+    request.gain = gain;
+    request.stop = &stream->stop;
+    request.outControl = &controlPipe;
+    request.outVideo = &videoPipe;
+    request.outProcess = &process;
+    if (!StartElectronSession(request, message, 512))
     {
-        if (controlPipe != INVALID_HANDLE_VALUE)
-            CloseHandle(controlPipe);
-        if (videoPipe != INVALID_HANDLE_VALUE)
-            CloseHandle(videoPipe);
-        SetStatus(stream, L"browser: pipe creation failed");
+        SetStatus(stream, message);
         return 0;
-    }
-
-    wchar_t command[4096] = {};
-    StringCchPrintfW(
-        command,
-        4096,
-        L"\"%s\" \"%s\" --width=%d --height=%d --fps=%d --scrollx=%d --scrolly=%d --hide-scrollbars=%d --scale=%.4f --mute=%d --gain=%.4f --control=\"%s\" --video=\"%s\" --url=\"%s\"",
-        browser,
-        appPath,
-        viewW,
-        viewH,
-        fps > 0 ? fps : kDefaultFps,
-        scrollX,
-        scrollY,
-        hideScroll,
-        scale,
-        mute,
-        gain,
-        controlName,
-        videoName,
-        url
-    );
-    HANDLE process = LaunchTool(command, nullptr, nullptr);
-    if (!process)
-    {
-        CloseHandle(controlPipe);
-        CloseHandle(videoPipe);
-        SetStatus(stream, L"browser host failed to start (see aisp.screen.log)");
-        return 0;
-    }
-
-    if (!ConnectPipe(controlPipe))
-        LogLine("browser: control pipe connect failed\r\n");
-    if (!ConnectPipe(videoPipe))
-    {
-        LogLine("browser: video pipe connect failed\r\n");
-        SetStatus(stream, L"browser: video pipe connect failed");
     }
 
     EnterCriticalSection(&stream->lock);
