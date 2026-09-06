@@ -40,6 +40,20 @@ public partial class MainWindow : Window
     private async void OnOpened(object? sender, EventArgs e)
     {
         Opened -= OnOpened;
+
+        try
+        {
+            await EnsureRuntimeDependenciesOnStartupAsync().ConfigureAwait(true);
+        }
+        catch (Exception ex)
+        {
+            await ShowMessageAsync(
+                    "Runtime setup failed",
+                    "Could not download Electron / Streamlink / FFmpeg.\n\n" + ex.Message
+                )
+                .ConfigureAwait(true);
+        }
+
         if (!LauncherBootstrap.Settings.CheckForUpdatesOnStartup)
             return;
         if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
@@ -56,7 +70,83 @@ public partial class MainWindow : Window
         }
         catch
         {
-            // Startup checks fail silently so offline use is not blocked.
+            // Startup update checks fail silently so offline use is not blocked.
+        }
+    }
+
+    private async Task EnsureRuntimeDependenciesOnStartupAsync()
+    {
+        try
+        {
+            _ = RuntimeDataPaths.DetectPlatform();
+        }
+        catch (PlatformNotSupportedException)
+        {
+            return;
+        }
+
+        if (!RuntimeDependencyBootstrap.NeedsDownload())
+        {
+            // Still resolve paths for later use when everything is already present.
+            await RuntimeDependencyBootstrap.EnsureAsync().ConfigureAwait(true);
+            return;
+        }
+
+        var statusText = new TextBlock
+        {
+            Text = "Checking runtime dependencies…",
+            TextWrapping = Avalonia.Media.TextWrapping.Wrap,
+        };
+        var progressBar = new ProgressBar
+        {
+            Minimum = 0,
+            Maximum = 100,
+            Value = 0,
+            Height = 8,
+        };
+        var dialog = new Window
+        {
+            Title = "Downloading runtime",
+            Width = 420,
+            SizeToContent = SizeToContent.Height,
+            CanResize = false,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner,
+            Content = new StackPanel
+            {
+                Margin = new Thickness(20),
+                Spacing = 16,
+                Children = { statusText, progressBar },
+            },
+        };
+
+        var status = new Progress<string>(message => statusText.Text = message);
+        var downloadProgress = new Progress<double>(fraction =>
+        {
+            progressBar.Value = Math.Clamp(fraction * 100, 0, 100);
+        });
+
+        var ensureTask = RuntimeDependencyBootstrap.EnsureAsync(status, downloadProgress);
+        var dialogTask = dialog.ShowDialog(this);
+
+        try
+        {
+            await ensureTask.ConfigureAwait(true);
+            dialog.Close();
+            await dialogTask.ConfigureAwait(true);
+        }
+        catch
+        {
+            dialog.Close();
+            try
+            {
+                await dialogTask.ConfigureAwait(true);
+            }
+            catch
+            {
+                // Dialog may already be closed.
+            }
+
+            throw;
         }
     }
 

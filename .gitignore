@@ -364,7 +364,6 @@ MigrationBackup/
 
 # Fody - auto-generated XML schema
 FodyWeavers.xsd
-.cursor
-.vscode/
-localDocs
-internal-nlog.txt
+# Launcher-downloaded Electron / Streamlink / FFmpeg cache
+aisp.launch.data/
+**/aisp.launch.data/
