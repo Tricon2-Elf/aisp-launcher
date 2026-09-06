@@ -1,5 +1,6 @@
 // Shared screen state and helpers; see screen.h.
 #include "screen.h"
+#include "config.h"
 
 #include <strsafe.h>
 #include <cmath>
@@ -63,14 +64,20 @@ void SetStatus(ScreenStream* stream, const wchar_t* text)
     DebugLog(L"aisp.hook: screen: %s\n", text);
 }
 
-// The tool path from the environment variable, or `fallback` relative to the game directory.
-bool ToolPath(const wchar_t* variable, const wchar_t* fallback, wchar_t* out, size_t outCount)
+// The tool path from the environment variable or [tools] key, else `fallback`; a relative
+// path is taken from the game directory.
+bool ToolPath(const wchar_t* variable, const wchar_t* key, const wchar_t* fallback, wchar_t* out, size_t outCount)
 {
-    if (GetEnvironmentVariableW(variable, out, static_cast<DWORD>(outCount)) == 0 || !out[0])
+    wchar_t configured[MAX_PATH] = {};
+    const wchar_t* path = ConfigString(variable, L"tools", key, configured, MAX_PATH) ? configured : fallback;
+    const bool absolute = path[0] == L'\\' || path[0] == L'/' || (path[0] && path[1] == L':');
+    if (absolute)
     {
-        if (!BuildGameFilePath(fallback, out, outCount))
+        if (FAILED(StringCchCopyW(out, outCount, path)))
             return false;
     }
+    else if (!BuildGameFilePath(path, out, outCount))
+        return false;
     return GetFileAttributesW(out) != INVALID_FILE_ATTRIBUTES;
 }
 

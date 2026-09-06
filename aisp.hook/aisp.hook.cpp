@@ -19,6 +19,7 @@
 #include "screen.h"
 #include "source.h"
 #include "tv_panel.h"
+#include "config.h"
 
 namespace aisp
 {
@@ -275,17 +276,18 @@ bool ReadConnectionValue(char lineNumber, wchar_t* out, size_t outCount)
 
 void InitScreenBase()
 {
-    if (GetEnvironmentVariableW(L"AISP_SCREEN_BASE", g_screenBase, 1024) > 0 && g_screenBase[0])
+    if (ConfigString(L"AISP_SCREEN_BASE", L"screens", L"base", g_screenBase, 1024))
     {
-        DebugLog(L"aisp.hook: screen base from environment: %s\n", g_screenBase);
+        DebugLog(L"aisp.hook: screen base from settings: %s\n", g_screenBase);
         return;
     }
 
+    // The screens host is its own setting; without one the pages live on the download host.
     wchar_t host[512] = {}, downloadPath[512] = {};
-    if (!ReadConnectionValue('4', host, 512))
+    if (!ConfigString(L"AISP_SCREEN_HOST", L"screens", L"host", host, 512) && !ReadConnectionValue('4', host, 512))
     {
         g_screenBase[0] = L'\0';
-        OutputDebugStringW(L"aisp.hook: no download host in connection.txt; screens are not redirected\n");
+        OutputDebugStringW(L"aisp.hook: no screens host set and no download host in connection.txt; screens are not redirected\n");
         return;
     }
     // The download path names the environment's endpoint directory: ai-sp/download.php or
@@ -532,8 +534,7 @@ void InitScreenVideo()
         SECURITY_ATTRIBUTES inheritable = {sizeof(SECURITY_ATTRIBUTES), nullptr, TRUE};
         g_toolLog = CreateFileW(logPath, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE, &inheritable, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
     }
-    wchar_t stats[8] = {};
-    g_logStats = GetEnvironmentVariableW(L"AISP_SCREEN_STATS", stats, 8) > 0 && stats[0] == L'1';
+    g_logStats = ConfigSwitch(L"AISP_SCREEN_STATS", L"screens", L"stats") == Switch::On;
 }
 // --- audio -----------------------------------------------------------------------------------
 
