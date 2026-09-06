@@ -17,7 +17,7 @@
                 Padding="0,0,0,12"
                 BorderBrush="{DynamicResource ThemeBorderLowBrush}"
                 BorderThickness="0,0,0,1">
-            <Grid ColumnDefinitions="Auto,*,Auto"
+            <Grid ColumnDefinitions="Auto,*,Auto,Auto"
                   ColumnSpacing="12">
                 <ComboBox x:Name="EnvironmentComboBox"
                           Grid.Column="0"
@@ -35,8 +35,15 @@
                           HorizontalAlignment="Right"
                           Content="Use Locale Replacer" />
 
-                <Button x:Name="StartGameButton"
+                <Button x:Name="CheckUpdatesButton"
                         Grid.Column="2"
+                        MinWidth="120"
+                        Padding="16,8"
+                        Content="Check for updates"
+                        Click="OnCheckUpdatesClick" />
+
+                <Button x:Name="StartGameButton"
+                        Grid.Column="3"
                         MinWidth="120"
                         Padding="16,8"
                         Content="Start Game"

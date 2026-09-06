@@ -7,6 +7,7 @@ public sealed class LauncherSettings
 {
     public const string DefaultWebsiteUrl = "https://aisp.moe";
     public const string DefaultGameExecutable = "ai sp@ce.exe";
+    public const string DefaultGitHubRepo = "Tricon2-Elf/aisp-launcher";
 
     public string WebsiteUrl { get; set; } = DefaultWebsiteUrl;
 
@@ -17,6 +18,16 @@ public sealed class LauncherSettings
     /// to emulate Japanese ACP/locale without external locale emulator tools.
     /// </summary>
     public bool UseLocaleReplacer { get; set; } = true;
+
+    /// <summary>
+    /// GitHub owner/repo that hosts launcher Releases (e.g. Tricon2-Elf/aisp-launcher).
+    /// </summary>
+    public string GitHubRepo { get; set; } = DefaultGitHubRepo;
+
+    /// <summary>
+    /// When true, check GitHub Releases for a newer launcher on startup.
+    /// </summary>
+    public bool CheckForUpdatesOnStartup { get; set; } = true;
 
     public GameEnvironment SelectedEnvironment { get; set; } = GameEnvironment.Stable;
 
