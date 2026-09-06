@@ -185,6 +185,9 @@ extern ScreenStream* g_streams;
 extern CRITICAL_SECTION g_streamsLock;
 extern HANDLE g_job;
 extern HANDLE g_toolLog;
+// aisp.screen.log next to the game, opened on first use (inheritable: the tools' stderr goes
+// there too). Invalid when the game directory cannot be written.
+HANDLE OpenScreenLog();
 extern bool g_screenVideoInitialised;
 extern HANDLE g_watchdog;
 extern bool g_logStats;

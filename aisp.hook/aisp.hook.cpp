@@ -19,6 +19,7 @@
 #include "screen.h"
 #include "source.h"
 #include "tv_panel.h"
+#include "https.h"
 #include "config.h"
 
 namespace aisp
@@ -301,7 +302,7 @@ void InitScreenBase()
     while (downloadPath[0] == L'/')
         std::wmemmove(downloadPath, downloadPath + 1, std::wcslen(downloadPath));
 
-    if (FAILED(StringCchPrintfW(g_screenBase, 1024, L"http://%s/%s/", host, downloadPath)))
+    if (FAILED(StringCchPrintfW(g_screenBase, 1024, L"%s://%s/%s/", ScreensHttpsEnabled(host) ? L"https" : L"http", host, downloadPath)))
         g_screenBase[0] = L'\0';
     DebugLog(L"aisp.hook: screen base: %s\n", g_screenBase);
 }
@@ -528,12 +529,7 @@ void InitScreenVideo()
         SetInformationJobObject(g_job, JobObjectExtendedLimitInformation, &limits, sizeof(limits));
     }
 
-    wchar_t logPath[MAX_PATH] = {};
-    if (BuildGameFilePath(L"aisp.screen.log", logPath, MAX_PATH))
-    {
-        SECURITY_ATTRIBUTES inheritable = {sizeof(SECURITY_ATTRIBUTES), nullptr, TRUE};
-        g_toolLog = CreateFileW(logPath, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE, &inheritable, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
-    }
+    OpenScreenLog();
     g_logStats = ConfigSwitch(L"AISP_SCREEN_STATS", L"screens", L"stats") == Switch::On;
 }
 // --- audio -----------------------------------------------------------------------------------
@@ -1968,6 +1964,7 @@ BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID)
         PatchSingleImport(GetModuleHandleW(nullptr), "ole32.dll", "CoCreateInstance", reinterpret_cast<void*>(HookCoCreateInstance), &g_originalCoCreateInstance);
         PatchSingleImport(GetModuleHandleW(nullptr), "ole32.dll", "OleDraw", reinterpret_cast<void*>(HookOleDraw), &g_originalOleDraw);
         PatchTvCommentButton();
+        PatchHttps();
     }
     return TRUE;
 }

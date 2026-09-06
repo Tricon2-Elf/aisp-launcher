@@ -40,9 +40,26 @@ bool BuildGameFilePath(const wchar_t* fileName, wchar_t* outPath, size_t outPath
 }
 
 
+HANDLE OpenScreenLog()
+{
+    if (g_toolLog != INVALID_HANDLE_VALUE)
+        return g_toolLog;
+    wchar_t logPath[MAX_PATH] = {};
+    if (!BuildGameFilePath(L"aisp.screen.log", logPath, MAX_PATH))
+        return INVALID_HANDLE_VALUE;
+    SECURITY_ATTRIBUTES inheritable = {sizeof(SECURITY_ATTRIBUTES), nullptr, TRUE};
+    HANDLE file = CreateFileW(logPath, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE, &inheritable, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file == INVALID_HANDLE_VALUE)
+        return INVALID_HANDLE_VALUE;
+    // Two threads may get here at once; the second one's handle is surplus.
+    if (InterlockedCompareExchangePointer(reinterpret_cast<PVOID volatile*>(&g_toolLog), file, INVALID_HANDLE_VALUE) != INVALID_HANDLE_VALUE)
+        CloseHandle(file);
+    return g_toolLog;
+}
+
 void LogLine(const char* text)
 {
-    if (g_toolLog == INVALID_HANDLE_VALUE)
+    if (OpenScreenLog() == INVALID_HANDLE_VALUE)
         return;
     // Our own lines carry the UTC time; the tools' stderr lines land in between as they are.
     SYSTEMTIME now = {};
