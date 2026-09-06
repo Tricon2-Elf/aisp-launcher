@@ -1,10 +1,7 @@
-// Off-screen browser host: electron:<http(s) url> runs aisp.electron\electron.exe with the app
-// in aisp.electron\app (stock Chromium, H.264 included) in a separate process, through the
-// session helper shared with the primary browser (browser.cpp). It paints raw BGRA of the
-// layout viewport on a named video pipe (latest frame; the hook blits the newest) and takes
-// live scroll, scale, mute and gain lines on a named control pipe. There is no PCM tap: the
-// hook sends a `gain` line (volume x distance x the game mixer mute/volume) and the host scales
-// the page's own media elements, so the Windows mixer slider of the host stays the user's.
+// Off-screen browser host: electron:<http(s) url>. On Windows this is aisp.electron\electron.exe
+// over named pipes. On Wine the hook listens on loopback TCP and aisp.electron/host.js starts
+// a stock native Electron with the same app — Wine named pipes are not a Unix socket a Linux
+// Node can connect to. Paint is latest-frame BGRA; live scroll/scale/mute/gain on control.
 #include "source.h"
 #include "browser.h"
 
@@ -42,6 +39,7 @@ DWORD RunElectronSource(ScreenStream* stream)
     SetStatus(stream, message);
 
     HANDLE controlPipe = nullptr, videoPipe = nullptr, process = nullptr;
+    bool tcp = false;
     ElectronSessionRequest request;
     request.url = url;
     request.width = viewW;
@@ -57,6 +55,7 @@ DWORD RunElectronSource(ScreenStream* stream)
     request.outControl = &controlPipe;
     request.outVideo = &videoPipe;
     request.outProcess = &process;
+    request.outTcp = &tcp;
     if (!StartElectronSession(request, message, 512))
     {
         SetStatus(stream, message);
@@ -66,6 +65,7 @@ DWORD RunElectronSource(ScreenStream* stream)
     EnterCriticalSection(&stream->lock);
     stream->processes[0] = process;
     stream->controlWrite = controlPipe;
+    stream->electronTcp = tcp;
     LeaveCriticalSection(&stream->lock);
     SendBrowserControl(stream);
 

@@ -1,6 +1,7 @@
 // Primary off-screen Electron for in-game screens. See browser.h.
 #define WIN32_LEAN_AND_MEAN
-#include <windows.h>
+#include <winsock2.h>
+#include <ws2tcpip.h>
 #include "browser.h"
 #include "config.h"
 
@@ -88,17 +89,44 @@ bool ResolveElectronPaths(wchar_t* browser, size_t browserCount, wchar_t* appPat
 }
 } // namespace
 
+bool IsRunningOnWine()
+{
+    static int cached = -1;
+    if (cached < 0)
+    {
+        HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
+        cached = ntdll && GetProcAddress(ntdll, "wine_get_version") ? 1 : 0;
+    }
+    return cached == 1;
+}
+
 void InitBrowserMode()
 {
     if (g_browserModeReady)
         return;
-    // electron, or ie (the default; anything else reads as ie).
+    // electron or ie; the default is ie on Windows and electron under Wine, where ieframe stays
+    // black. Anything else reads as the default.
+    const bool wine = IsRunningOnWine();
     wchar_t value[32] = {};
     ConfigString(L"AISP_PRIMARY_BROWSER", L"screens", L"primary_browser", value, 32);
-    g_usePrimaryBrowser = _wcsicmp(value, L"electron") == 0;
+    if (_wcsicmp(value, L"electron") == 0)
+        g_usePrimaryBrowser = true;
+    else if (_wcsicmp(value, L"ie") == 0 || _wcsicmp(value, L"ieframe") == 0)
+        g_usePrimaryBrowser = false;
+    else
+        g_usePrimaryBrowser = wine;
     g_browserModeReady = true;
+    if (wine)
+    {
+        // The channels to the native Electron are loopback sockets.
+        WSADATA wsa = {};
+        WSAStartup(MAKEWORD(2, 2), &wsa);
+    }
+    char text[160] = {};
+    StringCchPrintfA(text, 160, "wine=%d primary-browser=%s", wine ? 1 : 0, g_usePrimaryBrowser ? "electron" : "ie");
+    AppendInitLog(text);
     wchar_t line[160] = {};
-    StringCchPrintfW(line, 160, L"aisp.hook: primary-browser=%s\n", g_usePrimaryBrowser ? L"electron" : L"ie");
+    StringCchPrintfW(line, 160, L"aisp.hook: wine=%d primary-browser=%s\n", wine ? 1 : 0, g_usePrimaryBrowser ? L"electron" : L"ie");
     OutputDebugStringW(line);
 }
 
@@ -109,6 +137,153 @@ bool UsePrimaryBrowser()
     return g_usePrimaryBrowser;
 }
 
+bool WriteBrowserChannel(HANDLE handle, bool tcp, const void* data, size_t length)
+{
+    if (!handle || handle == INVALID_HANDLE_VALUE)
+        return false;
+    if (tcp)
+    {
+        const char* p = static_cast<const char*>(data);
+        while (length)
+        {
+            const int n = send(reinterpret_cast<SOCKET>(handle), p, static_cast<int>(length > 65536 ? 65536 : length), 0);
+            if (n <= 0)
+                return false;
+            p += n;
+            length -= static_cast<size_t>(n);
+        }
+        return true;
+    }
+    DWORD written = 0;
+    return WriteFile(handle, data, static_cast<DWORD>(length), &written, nullptr) != 0;
+}
+
+void CloseBrowserChannel(HANDLE handle, bool tcp)
+{
+    if (!handle || handle == INVALID_HANDLE_VALUE)
+        return;
+    if (tcp)
+    {
+        SOCKET sock = reinterpret_cast<SOCKET>(handle);
+        shutdown(sock, SD_BOTH);
+        closesocket(sock);
+    }
+    else
+    {
+        CloseHandle(handle);
+    }
+}
+
+namespace
+{
+SOCKET ListenLoopback(int* port)
+{
+    SOCKET sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (sock == INVALID_SOCKET)
+        return INVALID_SOCKET;
+    int on = 1;
+    setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, reinterpret_cast<const char*>(&on), sizeof(on));
+    sockaddr_in addr = {};
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    addr.sin_port = 0;
+    if (bind(sock, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != 0 || listen(sock, 1) != 0)
+    {
+        closesocket(sock);
+        return INVALID_SOCKET;
+    }
+    sockaddr_in got = {};
+    int gotLen = sizeof(got);
+    if (getsockname(sock, reinterpret_cast<sockaddr*>(&got), &gotLen) != 0)
+    {
+        closesocket(sock);
+        return INVALID_SOCKET;
+    }
+    *port = ntohs(got.sin_port);
+    return sock;
+}
+
+SOCKET AcceptLoopback(SOCKET listenSock, volatile LONG* stop)
+{
+    while (!stop || !*stop)
+    {
+        fd_set readSet;
+        FD_ZERO(&readSet);
+        FD_SET(listenSock, &readSet);
+        timeval timeout = {};
+        timeout.tv_usec = 50000;
+        const int ready = select(static_cast<int>(listenSock) + 1, &readSet, nullptr, nullptr, &timeout);
+        if (ready <= 0)
+            continue;
+        SOCKET accepted = accept(listenSock, nullptr, nullptr);
+        if (accepted != INVALID_SOCKET)
+            return accepted;
+    }
+    return INVALID_SOCKET;
+}
+
+bool RequestNativeElectron(const char* line, char* error, size_t errorCount)
+{
+    wchar_t spec[64] = {};
+    // Session state of the Wine runner, not a setting: environment only.
+    if (GetEnvironmentVariableW(L"AISP_ELECTRON_NATIVE", spec, 64) == 0 || !spec[0])
+        StringCchCopyW(spec, 64, L"127.0.0.1:18764");
+    char host[32] = "127.0.0.1";
+    int port = 18764;
+    char utf[64] = {};
+    WideCharToMultiByte(CP_UTF8, 0, spec, -1, utf, 64, nullptr, nullptr);
+    if (char* colon = std::strrchr(utf, ':'))
+    {
+        *colon = 0;
+        if (utf[0])
+            StringCchCopyA(host, 32, utf);
+        port = atoi(colon + 1);
+    }
+    SOCKET sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (sock == INVALID_SOCKET)
+    {
+        StringCchCopyA(error, errorCount, "native electron: socket failed");
+        return false;
+    }
+    sockaddr_in addr = {};
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(static_cast<u_short>(port));
+    addr.sin_addr.s_addr = inet_addr(host);
+    if (connect(sock, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != 0)
+    {
+        StringCchCopyA(error, errorCount, "native electron: broker not listening (start aisp.electron/host.js)");
+        closesocket(sock);
+        return false;
+    }
+    const int length = static_cast<int>(std::strlen(line));
+    if (send(sock, line, length, 0) != length)
+    {
+        StringCchCopyA(error, errorCount, "native electron: send failed");
+        closesocket(sock);
+        return false;
+    }
+    char reply[256] = {};
+    int got = 0;
+    while (got < static_cast<int>(sizeof(reply) - 1))
+    {
+        const int n = recv(sock, reply + got, static_cast<int>(sizeof(reply) - 1 - got), 0);
+        if (n <= 0)
+            break;
+        got += n;
+        reply[got] = 0;
+        if (std::strchr(reply, '\n'))
+            break;
+    }
+    closesocket(sock);
+    if (std::strncmp(reply, "ok", 2) != 0)
+    {
+        StringCchPrintfA(error, errorCount, "native electron: %s", reply[0] ? reply : "empty reply");
+        return false;
+    }
+    return true;
+}
+} // namespace
+
 bool StartElectronSession(const ElectronSessionRequest& request, wchar_t* error, size_t errorCount)
 {
     if (!request.url || !request.outControl || !request.outVideo)
@@ -117,6 +292,9 @@ bool StartElectronSession(const ElectronSessionRequest& request, wchar_t* error,
             StringCchCopyW(error, errorCount, L"browser: bad session request");
         return false;
     }
+    const bool tcp = IsRunningOnWine();
+    if (request.outTcp)
+        *request.outTcp = tcp;
     *request.outControl = nullptr;
     *request.outVideo = nullptr;
     if (request.outProcess)
@@ -124,6 +302,58 @@ bool StartElectronSession(const ElectronSessionRequest& request, wchar_t* error,
 
     wchar_t controlSpec[128] = {}, videoSpec[128] = {};
     HANDLE controlListen = INVALID_HANDLE_VALUE, videoListen = INVALID_HANDLE_VALUE;
+    if (tcp)
+    {
+        int controlPort = 0, videoPort = 0;
+        SOCKET controlSock = ListenLoopback(&controlPort);
+        SOCKET videoSock = ListenLoopback(&videoPort);
+        if (controlSock == INVALID_SOCKET || videoSock == INVALID_SOCKET)
+        {
+            if (controlSock != INVALID_SOCKET)
+                closesocket(controlSock);
+            if (videoSock != INVALID_SOCKET)
+                closesocket(videoSock);
+            if (error)
+                StringCchCopyW(error, errorCount, L"browser: tcp listen failed");
+            return false;
+        }
+        StringCchPrintfW(controlSpec, 128, L"127.0.0.1:%d", controlPort);
+        StringCchPrintfW(videoSpec, 128, L"127.0.0.1:%d", videoPort);
+        controlListen = reinterpret_cast<HANDLE>(controlSock);
+        videoListen = reinterpret_cast<HANDLE>(videoSock);
+
+        char urlUtf8[4096] = {};
+        WideCharToMultiByte(CP_UTF8, 0, request.url, -1, urlUtf8, 4096, nullptr, nullptr);
+        char open[4600] = {};
+        StringCchPrintfA(
+            open,
+            4600,
+            "open width=%d height=%d fps=%d control=127.0.0.1:%d video=127.0.0.1:%d framed=%d scrollx=%d scrolly=%d hide=%d scale=%.4f mute=%d gain=%.4f url=%s\n",
+            request.width,
+            request.height,
+            request.fps > 0 ? request.fps : kDefaultFps,
+            controlPort,
+            videoPort,
+            request.framed ? 1 : 0,
+            request.scrollx,
+            request.scrolly,
+            request.hideScroll,
+            request.scale > 0 ? request.scale : 1.0f,
+            request.mute,
+            request.gain,
+            urlUtf8
+        );
+        char nativeError[256] = {};
+        if (!RequestNativeElectron(open, nativeError, 256))
+        {
+            CloseBrowserChannel(controlListen, true);
+            CloseBrowserChannel(videoListen, true);
+            if (error)
+                MultiByteToWideChar(CP_UTF8, 0, nativeError, -1, error, static_cast<int>(errorCount));
+            return false;
+        }
+    }
+    else
     {
         wchar_t browser[MAX_PATH] = {}, appPath[MAX_PATH] = {};
         if (!ResolveElectronPaths(browser, MAX_PATH, appPath, MAX_PATH, error, errorCount))
@@ -161,7 +391,7 @@ bool StartElectronSession(const ElectronSessionRequest& request, wchar_t* error,
             videoSpec,
             request.url
         );
-        HANDLE process = LaunchTool(command, nullptr, nullptr);
+        HANDLE process = LaunchBrowserHost(command);
         if (!process)
         {
             CloseHandle(controlListen);
@@ -175,6 +405,26 @@ bool StartElectronSession(const ElectronSessionRequest& request, wchar_t* error,
     }
 
     HANDLE control = nullptr, video = nullptr;
+    if (tcp)
+    {
+        SOCKET c = AcceptLoopback(reinterpret_cast<SOCKET>(controlListen), request.stop);
+        SOCKET v = AcceptLoopback(reinterpret_cast<SOCKET>(videoListen), request.stop);
+        CloseBrowserChannel(controlListen, true);
+        CloseBrowserChannel(videoListen, true);
+        if (c == INVALID_SOCKET || v == INVALID_SOCKET)
+        {
+            if (c != INVALID_SOCKET)
+                closesocket(c);
+            if (v != INVALID_SOCKET)
+                closesocket(v);
+            if (error)
+                StringCchCopyW(error, errorCount, L"browser: tcp accept failed");
+            return false;
+        }
+        control = reinterpret_cast<HANDLE>(c);
+        video = reinterpret_cast<HANDLE>(v);
+    }
+    else
     {
         // The video pipe first, with the whole budget: the host connects both pipes at once,
         // so once that one is in the other needs a moment at most.
@@ -230,12 +480,11 @@ void SendPrimaryControl(ScreenStream* stream)
         return;
     const int mute = stream->muted || (stream->rolloff && stream->distanceGain < 0.02f) ? 1 : 0;
     const float gain = stream->pageGain;
-    DWORD written = 0;
     if (mute != stream->sentPrimaryMute)
     {
         char line[32] = {};
         StringCchPrintfA(line, 32, "mute %d\n", mute);
-        WriteFile(stream->primaryControl, line, static_cast<DWORD>(std::strlen(line)), &written, nullptr);
+        WriteBrowserChannel(stream->primaryControl, stream->primaryTcp, line, std::strlen(line));
         stream->sentPrimaryMute = mute;
     }
     const float sent = stream->sentPrimaryGain;
@@ -243,7 +492,7 @@ void SendPrimaryControl(ScreenStream* stream)
         return;
     char line[32] = {};
     StringCchPrintfA(line, 32, "gain %.4f\n", gain);
-    WriteFile(stream->primaryControl, line, static_cast<DWORD>(std::strlen(line)), &written, nullptr);
+    WriteBrowserChannel(stream->primaryControl, stream->primaryTcp, line, std::strlen(line));
     stream->sentPrimaryGain = gain;
 }
 
@@ -263,8 +512,7 @@ void ForwardScriptToPrimary(ScreenStream* stream, const wchar_t* script)
     char line[3600] = {};
     if (FAILED(StringCchPrintfA(line, 3600, "eval %s\n", utf8)))
         return;
-    DWORD written = 0;
-    WriteFile(stream->primaryControl, line, static_cast<DWORD>(std::strlen(line)), &written, nullptr);
+    WriteBrowserChannel(stream->primaryControl, stream->primaryTcp, line, std::strlen(line));
     EnterCriticalSection(&stream->lock);
     ++stream->primaryEvals;
     LeaveCriticalSection(&stream->lock);
@@ -343,6 +591,7 @@ void StopPrimaryBrowser(ScreenStream* stream)
     HANDLE control = nullptr;
     HANDLE video = nullptr;
     HANDLE videoThread = nullptr;
+    bool tcp = false;
     EnterCriticalSection(&stream->lock);
     process = stream->primaryProcess;
     stream->primaryProcess = nullptr;
@@ -352,6 +601,8 @@ void StopPrimaryBrowser(ScreenStream* stream)
     stream->primaryVideo = nullptr;
     videoThread = stream->primaryThread;
     stream->primaryThread = nullptr;
+    tcp = stream->primaryTcp;
+    stream->primaryTcp = false;
     stream->pageReady = false;
     stream->sentPrimaryMute = -1;
     stream->sentPrimaryGain = -1.0f;
@@ -365,15 +616,24 @@ void StopPrimaryBrowser(ScreenStream* stream)
     // The video thread sits in a synchronous ReadFile on its pipe, and closing such a handle
     // waits for that read to finish; a settled page sends nothing, so the close would never
     // return. The host goes first (its end of the pipe breaks the read), the thread is joined,
-    // and the handles are closed last.
+    // and the handles are closed last. A socket is the other way round: there is no host
+    // process to end, and shutdown releases a blocked recv.
     if (process)
     {
         TerminateProcess(process, 0);
         CloseHandle(process);
     }
+    if (tcp)
+    {
+        CloseBrowserChannel(control, true);
+        CloseBrowserChannel(video, true);
+    }
     JoinPrimaryThread(videoThread, "video");
-    CloseHandleIf(&control);
-    CloseHandleIf(&video);
+    if (!tcp)
+    {
+        CloseHandleIf(&control);
+        CloseHandleIf(&video);
+    }
     LogLine("primary browser stopped\r\n");
 }
 
@@ -586,8 +846,7 @@ bool CallPrimary(ScreenStream* stream, const char* script, char* out, size_t out
         if (c == '\r' || c == '\n')
             c = ' ';
     line += '\n';
-    DWORD written = 0;
-    const bool sent = WriteFile(control, line.data(), static_cast<DWORD>(line.size()), &written, nullptr) != 0;
+    const bool sent = WriteBrowserChannel(control, stream->primaryTcp, line.data(), line.size());
     LeaveCriticalSection(&stream->lock);
     if (!sent)
         return false;
@@ -617,6 +876,7 @@ DWORD WINAPI PrimaryVideoThread(LPVOID parameter)
     LeaveCriticalSection(&stream->lock);
 
     HANDLE control = nullptr, video = nullptr, process = nullptr;
+    bool tcp = false;
     ElectronSessionRequest request;
     request.url = url;
     request.width = width;
@@ -629,6 +889,7 @@ DWORD WINAPI PrimaryVideoThread(LPVOID parameter)
     request.outControl = &control;
     request.outVideo = &video;
     request.outProcess = &process;
+    request.outTcp = &tcp;
     wchar_t message[512] = {};
     if (!StartElectronSession(request, message, 512))
     {
@@ -650,8 +911,8 @@ DWORD WINAPI PrimaryVideoThread(LPVOID parameter)
             TerminateProcess(process, 0);
             CloseHandle(process);
         }
-        CloseHandleIf(&control);
-        CloseHandleIf(&video);
+        CloseBrowserChannel(control, tcp);
+        CloseBrowserChannel(video, tcp);
         return 0;
     }
 
@@ -659,6 +920,7 @@ DWORD WINAPI PrimaryVideoThread(LPVOID parameter)
     stream->primaryProcess = process;
     stream->primaryControl = control;
     stream->primaryVideo = video;
+    stream->primaryTcp = tcp;
     LeaveCriticalSection(&stream->lock);
     SendPrimaryControl(stream);
 

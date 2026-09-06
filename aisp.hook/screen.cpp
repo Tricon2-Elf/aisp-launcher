@@ -58,6 +58,30 @@ HANDLE OpenScreenLog()
     return g_toolLog;
 }
 
+void ResetInitLog()
+{
+    wchar_t path[MAX_PATH] = {};
+    if (!BuildGameFilePath(L"aisp.hook.init.log", path, MAX_PATH))
+        return;
+    HANDLE file = CreateFileW(path, GENERIC_WRITE, FILE_SHARE_READ, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file != INVALID_HANDLE_VALUE)
+        CloseHandle(file);
+}
+
+void AppendInitLog(const char* text)
+{
+    wchar_t path[MAX_PATH] = {};
+    if (!BuildGameFilePath(L"aisp.hook.init.log", path, MAX_PATH))
+        return;
+    HANDLE file = CreateFileW(path, FILE_APPEND_DATA, FILE_SHARE_READ, nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file == INVALID_HANDLE_VALUE)
+        return;
+    DWORD written = 0;
+    WriteFile(file, text, static_cast<DWORD>(std::strlen(text)), &written, nullptr);
+    WriteFile(file, "\r\n", 2, &written, nullptr);
+    CloseHandle(file);
+}
+
 void LogLine(const char* text)
 {
     if (OpenScreenLog() == INVALID_HANDLE_VALUE)
@@ -119,6 +143,30 @@ HANDLE LaunchTool(wchar_t* commandLine, HANDLE stdIn, HANDLE stdOut)
     return info.hProcess;
 }
 
+HANDLE LaunchBrowserHost(wchar_t* commandLine)
+{
+    SECURITY_ATTRIBUTES inheritable = {sizeof(SECURITY_ATTRIBUTES), nullptr, TRUE};
+    HANDLE nul = CreateFileW(L"NUL", GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, &inheritable, OPEN_EXISTING, 0, nullptr);
+    if (nul == INVALID_HANDLE_VALUE)
+        return LaunchTool(commandLine, nullptr, nullptr);
+    STARTUPINFOW startup = {};
+    startup.cb = sizeof(startup);
+    startup.dwFlags = STARTF_USESTDHANDLES | STARTF_USESHOWWINDOW;
+    startup.wShowWindow = SW_HIDE;
+    startup.hStdInput = nul;
+    startup.hStdOutput = nul;
+    startup.hStdError = nul;
+    PROCESS_INFORMATION info = {};
+    const BOOL ok = CreateProcessW(nullptr, commandLine, nullptr, nullptr, TRUE, CREATE_NO_WINDOW, nullptr, nullptr, &startup, &info);
+    CloseHandle(nul);
+    if (!ok)
+        return nullptr;
+    if (g_job)
+        AssignProcessToJobObject(g_job, info.hProcess);
+    CloseHandle(info.hThread);
+    return info.hProcess;
+}
+
 bool CreateInheritablePipe(HANDLE* readEnd, HANDLE* writeEnd, bool inheritRead)
 {
     SECURITY_ATTRIBUTES inheritable = {sizeof(SECURITY_ATTRIBUTES), nullptr, TRUE};
@@ -172,13 +220,12 @@ void SendBrowserControl(ScreenStream* stream)
         // The gain line is the fader; mute is the title mute plus a hard cut once the screen is
         // effectively out of earshot, in case some page audio escapes the page-side scaler.
         const int mute = stream->muted || (stream->rolloff && stream->distanceGain < 0.02f) ? 1 : 0;
-        DWORD written = 0;
         if (stream->pageScroll[0] != stream->sentScroll[0] || stream->pageScroll[1] != stream->sentScroll[1]
             || hide != stream->sentScrollLock || stream->pageScale != stream->sentScale || mute != stream->sentMute)
         {
             char line[128] = {};
             StringCchPrintfA(line, 128, "scroll %d %d %d\nscale %.4f\nmute %d\n", stream->pageScroll[0], stream->pageScroll[1], hide, stream->pageScale > 0 ? stream->pageScale : 1.0f, mute);
-            WriteFile(stream->controlWrite, line, static_cast<DWORD>(std::strlen(line)), &written, nullptr);
+            WriteBrowserChannel(stream->controlWrite, stream->electronTcp, line, std::strlen(line));
             stream->sentScroll[0] = stream->pageScroll[0];
             stream->sentScroll[1] = stream->pageScroll[1];
             stream->sentScrollLock = hide;
@@ -193,7 +240,7 @@ void SendBrowserControl(ScreenStream* stream)
         {
             char line[32] = {};
             StringCchPrintfA(line, 32, "gain %.4f\n", gain);
-            WriteFile(stream->controlWrite, line, static_cast<DWORD>(std::strlen(line)), &written, nullptr);
+            WriteBrowserChannel(stream->controlWrite, stream->electronTcp, line, std::strlen(line));
             stream->sentPageGain = gain;
         }
     }

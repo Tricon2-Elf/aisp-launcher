@@ -13,7 +13,9 @@
 // origin/feature/tv-support's aisp.electron app; that branch's hardcoded Twitch TV overlay
 // is not used — crop/scroll/scale are the layout knobs.
 const { app, BrowserWindow, session } = require("electron");
-const net = require("node:net");
+const net = require("net");
+const fs = require("fs");
+const path = require("path");
 
 function argValue(name, fallback = "") {
   const prefix = `${name}=`;
@@ -47,8 +49,19 @@ function argFloat(name, fallback) {
   return Number.isFinite(n) ? n : fallback;
 }
 
+const logPath = path.join(__dirname, "..", "electron-browser.log");
 function log(message) {
-  process.stderr.write(`electron-browser: ${message}\n`);
+  const line = `electron-browser: ${message}\n`;
+  try {
+    process.stderr.write(line);
+  } catch {
+    // Wine/NUL stdio: uv_pipe_open already failed before we got here, or write throws
+  }
+  try {
+    fs.appendFileSync(logPath, line);
+  } catch {
+    // the game directory may be read-only; the named pipes are the real channel
+  }
 }
 
 // For anything on a timer: the first occurrence is the useful one, the next thousand are noise.
@@ -60,8 +73,8 @@ function logOnce(message) {
   log(message);
 }
 
-process.on("uncaughtException", (error) => log(`uncaught: ${error.stack ?? error.message}`));
-process.on("unhandledRejection", (error) => log(`unhandled: ${error?.stack ?? error}`));
+process.on("uncaughtException", (error) => log(`uncaught: ${error && error.stack ? error.stack : error && error.message}`));
+process.on("unhandledRejection", (error) => log(`unhandled: ${error && error.stack ? error.stack : error}`));
 
 const width = Math.max(1, argInt("--width", 486));
 const height = Math.max(1, argInt("--height", 343));
@@ -78,6 +91,7 @@ const framed = argInt("--framed", 0) ? 1 : 0;
 // app announces itself as the first framed message so a stale copy shows up in aisp.screen.log.
 const PROTOCOL = 2;
 const APP_VERSION = `aisp.electron app 2026-09-07b (protocol ${PROTOCOL})`;
+const wine = argInt("--wine", 0) ? 1 : 0;
 
 const state = {
   scrollx: argInt("--scrollx", 0),
@@ -111,6 +125,15 @@ app.commandLine.appendSwitch("autoplay-policy", "no-user-gesture-required");
 app.commandLine.appendSwitch("force-device-scale-factor", "1");
 app.commandLine.appendSwitch("disable-logging");
 app.commandLine.appendSwitch("log-level", "3");
+if (wine || process.platform !== "win32") {
+  // Wine-in-process Chromium dies; native Linux on Xvfb has no usable GPU process.
+  // Off-screen paint is software either way. --no-sandbox must also be on the argv
+  // (host.js) because the SUID helper check runs before this file.
+  app.disableHardwareAcceleration();
+  app.commandLine.appendSwitch("no-sandbox");
+  app.commandLine.appendSwitch("disable-gpu-sandbox");
+  app.commandLine.appendSwitch("disable-dev-shm-usage");
+}
 app.setName("aisp");
 app.setAppUserModelId("be.kaetemi.aisp.electron");
 
@@ -367,7 +390,11 @@ function applyLine(line) {
 function connectPipe(name, label, onData) {
   if (!name)
     return null;
-  const socket = net.createConnection({ path: name, allowHalfOpen: true });
+  // Windows: \\.\pipe\…  Wine/native: 127.0.0.1:port (the hook listens, we connect).
+  const tcp = /^(\d+\.\d+\.\d+\.\d+):(\d+)$/.exec(name);
+  const socket = tcp
+    ? net.createConnection({ host: tcp[1], port: Number.parseInt(tcp[2], 10) })
+    : net.createConnection({ path: name, allowHalfOpen: true });
   socket.once("connect", () => {
     log(`${label} pipe connected`);
     if (label === "video" && framed) {
@@ -450,7 +477,10 @@ app.whenReady().then(() => {
     backgroundColor: "#000000",
     webPreferences: {
       backgroundThrottling: false,
-      offscreen: { useSharedTexture: false },
+      // Electron 22 (Wine ia32) wants a boolean; 31+ accepts { useSharedTexture }.
+      offscreen: Number.parseInt(String(process.versions.electron).split(".")[0], 10) >= 31
+        ? { useSharedTexture: false }
+        : true,
     },
   });
   browserWindow.setMenuBarVisibility(false);
@@ -461,7 +491,10 @@ app.whenReady().then(() => {
   contents.setUserAgent(
     `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chromeVersion} Safari/537.36`
   );
-  contents.setWindowOpenHandler(() => ({ action: "deny" }));
+  if (typeof contents.setWindowOpenHandler === "function")
+    contents.setWindowOpenHandler(() => ({ action: "deny" }));
+  else
+    contents.on("new-window", (event) => event.preventDefault());
   contents.setFrameRate(fps);
   contents.setAudioMuted(!!state.muted);
   contents.on("paint", (_event, _dirty, image) => {

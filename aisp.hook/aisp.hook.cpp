@@ -195,14 +195,17 @@ HMODULE WINAPI HookLoadLibraryW(LPCWSTR lpLibFileName)
 // job so they die with the game; stderr of every tool goes to aisp.screen.log next to the game
 // executable.
 //
-// Optionally ([screens] primary_browser=electron) a sibling Electron process is the page: it
-// loads the rewritten screen URL, reports document.title, and its BGRA is what OleDraw presents
-// as the crop. IE is never navigated and its engine never runs: IWebBrowser2::get_Document hands
-// the client a document of the hook's own (document.cpp) whose execScript runs the client's
-// script in Electron and whose getElementById / get_innerHTML fetch the element from Electron's
-// page, so neither mshtml nor Wine's Gecko is involved. The secondary compositor (electron: or
-// ffmpeg) is unchanged — sites refuse iframes, and streams need a real decoder. Both primary
-// and electron: are aisp.electron\electron.exe over named pipes.
+// Optionally ([screens] primary_browser=electron, the default under Wine, where ieframe stays
+// black) a sibling Electron process is the page: it loads the rewritten screen URL, reports
+// document.title, and its BGRA is what OleDraw presents as the crop. IE is never navigated and
+// its engine never runs: IWebBrowser2::get_Document hands the client a document of the hook's
+// own (document.cpp) whose execScript runs the client's script in Electron and whose
+// getElementById / get_innerHTML fetch the element from Electron's page, so neither mshtml nor
+// Wine's Gecko is involved. The secondary compositor (electron: or ffmpeg) is unchanged — sites
+// refuse iframes, and streams need a real decoder. On Windows both primary and electron: are
+// aisp.electron\electron.exe over named pipes. On Wine they are a stock native Electron started
+// by aisp.electron/host.js over loopback TCP (Wine named pipes are not a Unix socket a Linux
+// Node can connect to).
 // ---------------------------------------------------------------------------------------------
 
 using CoCreateInstance_t = HRESULT(WINAPI*)(REFCLSID, LPUNKNOWN, DWORD, REFIID, LPVOID*);
@@ -1054,6 +1057,7 @@ void StopSession(ScreenStream* stream)
     // source blocked reading ffmpeg's output sees the pipe close.
     HANDLE processes[2] = {};
     HANDLE controlWrite = nullptr;
+    bool electronTcp = false;
     EnterCriticalSection(&stream->lock);
     for (int i = 0; i < 2; ++i)
     {
@@ -1062,9 +1066,10 @@ void StopSession(ScreenStream* stream)
     }
     controlWrite = stream->controlWrite;
     stream->controlWrite = nullptr;
+    electronTcp = stream->electronTcp;
+    stream->electronTcp = false;
     LeaveCriticalSection(&stream->lock);
-    if (controlWrite)
-        CloseHandle(controlWrite);
+    CloseBrowserChannel(controlWrite, electronTcp);
     for (HANDLE process : processes)
     {
         if (process)
@@ -2086,6 +2091,42 @@ void PatchLoadedModules()
     CloseHandle(snapshot);
 }
 
+// The hooks must be in place before the game runs a single instruction: the launcher injects
+// this DLL into the suspended process and resumes it as soon as LoadLibrary returns, and the
+// client sets its code page and creates its browser controls right at startup. So on Windows
+// this runs inline in DllMain. Under Wine the loader holds the process lock for DllMain and
+// enumerating modules or VirtualProtect of other IAT entries from there never returns, so
+// there it runs on a thread once that lock is dropped, accepting the late start.
+DWORD WINAPI InitHooksThread(LPVOID deferred)
+{
+    if (deferred)
+        Sleep(500);
+    ResetInitLog();
+    AppendInitLog("init: start");
+    InitBrowserMode();
+    AppendInitLog("init: browser mode");
+    // The screen hooks only concern the game executable's own imports (the ATL host is
+    // linked into it); other modules keep the real functions.
+    InitScreenBase();
+    AppendInitLog("init: screen base");
+    PatchSingleImport(GetModuleHandleW(nullptr), "ole32.dll", "CoCreateInstance", reinterpret_cast<void*>(HookCoCreateInstance), &g_originalCoCreateInstance);
+    PatchSingleImport(GetModuleHandleW(nullptr), "ole32.dll", "OleDraw", reinterpret_cast<void*>(HookOleDraw), &g_originalOleDraw);
+    AppendInitLog("init: ole32 patched");
+    PatchTvCommentButton();
+    AppendInitLog("init: tv button");
+    PatchHttps();
+    AppendInitLog("init: https");
+    // Walking every module's kernel32 IAT from a worker still kills the process under
+    // Wine 9. Locale patches are not required for the screen blit; skip them here.
+    if (!IsRunningOnWine())
+    {
+        PatchLoadedModules();
+        AppendInitLog("init: modules patched");
+    }
+    AppendInitLog("init: done");
+    return 0;
+}
+
 } // namespace aisp
 
 using namespace aisp;
@@ -2094,15 +2135,16 @@ BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID)
     if (reason == DLL_PROCESS_ATTACH)
     {
         DisableThreadLibraryCalls(instance);
-        PatchLoadedModules();
-        InitBrowserMode();
-        // The screen hooks only concern the game executable's own imports (the ATL host is
-        // linked into it); other modules keep the real functions.
-        InitScreenBase();
-        PatchSingleImport(GetModuleHandleW(nullptr), "ole32.dll", "CoCreateInstance", reinterpret_cast<void*>(HookCoCreateInstance), &g_originalCoCreateInstance);
-        PatchSingleImport(GetModuleHandleW(nullptr), "ole32.dll", "OleDraw", reinterpret_cast<void*>(HookOleDraw), &g_originalOleDraw);
-        PatchTvCommentButton();
-        PatchHttps();
+        if (!IsRunningOnWine())
+        {
+            InitHooksThread(nullptr);
+        }
+        else
+        {
+            HANDLE thread = CreateThread(nullptr, 0, InitHooksThread, reinterpret_cast<LPVOID>(1), 0, nullptr);
+            if (thread)
+                CloseHandle(thread);
+        }
     }
     return TRUE;
 }

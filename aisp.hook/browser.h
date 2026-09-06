@@ -10,13 +10,22 @@
 
 namespace aisp
 {
-// [screens] primary_browser (or AISP_PRIMARY_BROWSER): electron or ie, the default.
+// Whether ntdll exports wine_get_version; cached on the first call.
+bool IsRunningOnWine();
+// [screens] primary_browser (or AISP_PRIMARY_BROWSER): electron or ie. Default: ie on Windows,
+// electron under Wine, where ieframe stays black.
 bool UsePrimaryBrowser();
 void InitBrowserMode();
 
-// Starts the off-screen host, aisp.electron\electron.exe, with named pipes for control and
-// video. `framed` makes the video channel carry headed messages (frames, title lines, call
-// replies) instead of bare frames.
+// Named pipe on Windows, SOCKET on Wine. Wine must not CloseHandle a socket, and its WriteFile
+// on a socket never returns, so writes go through send there.
+void CloseBrowserChannel(HANDLE handle, bool tcp);
+bool WriteBrowserChannel(HANDLE handle, bool tcp, const void* data, size_t length);
+
+// Starts the off-screen host. Windows: aisp.electron\electron.exe + named pipes. Wine: listen on
+// 127.0.0.1 TCP and ask the native broker (AISP_ELECTRON_NATIVE, default 127.0.0.1:18764) to
+// spawn stock Linux Electron with the same app. `framed` makes the video channel carry headed
+// messages (frames, title lines, call replies) instead of bare frames.
 struct ElectronSessionRequest
 {
     const wchar_t* url = nullptr;
@@ -29,6 +38,7 @@ struct ElectronSessionRequest
     HANDLE* outControl = nullptr;
     HANDLE* outVideo = nullptr;
     HANDLE* outProcess = nullptr;
+    bool* outTcp = nullptr;
 };
 bool StartElectronSession(const ElectronSessionRequest& request, wchar_t* error, size_t errorCount);
 

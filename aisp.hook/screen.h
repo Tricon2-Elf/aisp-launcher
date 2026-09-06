@@ -105,9 +105,9 @@ struct ScreenStream
     int sentScrollLock = -1;
     float sentScale = -1.0f;
     int sentMute = -1;
-    // Primary Electron (optional): paints the screen page, reports its title and answers the
-    // client's page reads (document.cpp), so ieframe neither draws nor navigates. Secondary
-    // electron:/ffmpeg still composites.
+    // Primary Electron (optional; the default under Wine): paints the screen page, reports its
+    // title and answers the client's page reads (document.cpp), so ieframe neither draws nor
+    // navigates. Secondary electron:/ffmpeg still composites.
     wchar_t pageUrl[4096] = {};          // rewritten screen URL this control navigated to
     wchar_t electronTitle[1024] = {};    // latest document.title from the primary host
     bool electronTitleNew = false;       // set by the video thread, cleared when applied
@@ -145,6 +145,8 @@ struct ScreenStream
     int sentPrimaryMute = -1;
     float sentPrimaryGain = -1.0f;
     ULONGLONG primaryRetryAt = 0;        // tick after which a failed start may be tried again
+    bool electronTcp = false;            // Wine: secondary electron: uses loopback TCP, not a named pipe
+    bool primaryTcp = false;
     // A video's shared timeline from the title: at start=<unix seconds> it was at offset=<s>
     // and playing; paused=<unix seconds> is when it stopped advancing. A source that can seek
     // starts at the position this implies (TimelinePosition); a change of start or offset
@@ -236,6 +238,10 @@ extern bool g_logStats;
 void LogLine(const char* text);
 void DebugLog(const wchar_t* format, const wchar_t* arg);
 bool BuildGameFilePath(const wchar_t* fileName, wchar_t* outPath, size_t outPathCount);
+// aisp.hook.init.log next to the game: one line per init step, so a hook that never got as far
+// as the screen log can still be seen. Reset at the start of the init, appended after.
+void ResetInitLog();
+void AppendInitLog(const char* text);
 // The line the screen shows while a source has nothing to draw yet (or failed).
 void SetStatus(ScreenStream* stream, const wchar_t* text);
 
@@ -243,6 +249,9 @@ void SetStatus(ScreenStream* stream, const wchar_t* text);
 // directory; attached to the job so they die with the game, stderr to the log.
 bool ToolPath(const wchar_t* variable, const wchar_t* key, const wchar_t* fallback, wchar_t* out, size_t outCount);
 HANDLE LaunchTool(wchar_t* commandLine, HANDLE stdIn, HANDLE stdOut);
+// Electron/Node under Wine crash if stdout is a Wine file or pipe (uv_pipe_open EINVAL), so the
+// browser host starts with NUL stdio, hidden, in the job.
+HANDLE LaunchBrowserHost(wchar_t* commandLine);
 bool CreateInheritablePipe(HANDLE* readEnd, HANDLE* writeEnd, bool inheritRead);
 bool RunToolForLine(wchar_t* commandLine, wchar_t* out, size_t outCount);
 // Up to maxLines lines of a tool's stdout (each up to lineCount characters); returns the count.
