@@ -46,6 +46,9 @@
     <ClCompile Include="document.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="ytdlp.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="screen.h">
@@ -67,6 +70,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="document.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="ytdlp.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>

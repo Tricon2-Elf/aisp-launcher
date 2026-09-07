@@ -36,7 +36,7 @@ HOST_UID="$(id -u)"
 HOST_GID="$(id -g)"
 
 # attach.cpp is a helper exe, not part of the DLL. ws2_32 is for browser.cpp's loopback sockets.
-HOOK_SOURCES="$SOURCE_DIR_IN_CONTAINER/aisp.hook.cpp $SOURCE_DIR_IN_CONTAINER/browser.cpp $SOURCE_DIR_IN_CONTAINER/screen.cpp $SOURCE_DIR_IN_CONTAINER/source.cpp $SOURCE_DIR_IN_CONTAINER/source_electron.cpp $SOURCE_DIR_IN_CONTAINER/source_ffmpeg.cpp $SOURCE_DIR_IN_CONTAINER/source_pattern.cpp $SOURCE_DIR_IN_CONTAINER/tv_panel.cpp $SOURCE_DIR_IN_CONTAINER/https.cpp $SOURCE_DIR_IN_CONTAINER/config.cpp $SOURCE_DIR_IN_CONTAINER/document.cpp"
+HOOK_SOURCES="$SOURCE_DIR_IN_CONTAINER/aisp.hook.cpp $SOURCE_DIR_IN_CONTAINER/browser.cpp $SOURCE_DIR_IN_CONTAINER/screen.cpp $SOURCE_DIR_IN_CONTAINER/source.cpp $SOURCE_DIR_IN_CONTAINER/source_electron.cpp $SOURCE_DIR_IN_CONTAINER/source_ffmpeg.cpp $SOURCE_DIR_IN_CONTAINER/source_pattern.cpp $SOURCE_DIR_IN_CONTAINER/tv_panel.cpp $SOURCE_DIR_IN_CONTAINER/https.cpp $SOURCE_DIR_IN_CONTAINER/config.cpp $SOURCE_DIR_IN_CONTAINER/document.cpp $SOURCE_DIR_IN_CONTAINER/ytdlp.cpp"
 ATTACH_OUTPUT="$(dirname "$OUTPUT")/aisp.attach.exe"
 ATTACH_OUTPUT_IN_CONTAINER="${ATTACH_OUTPUT/#$ROOT/\/workspace}"
 

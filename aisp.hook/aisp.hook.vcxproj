@@ -159,6 +159,7 @@
     <ClCompile Include="aisp.hook.cpp" />
     <ClCompile Include="browser.cpp" />
     <ClCompile Include="document.cpp" />
+    <ClCompile Include="ytdlp.cpp" />
     <ClCompile Include="screen.cpp" />
     <ClCompile Include="source.cpp" />
     <ClCompile Include="source_electron.cpp" />
@@ -171,6 +172,7 @@
   <ItemGroup>
     <ClInclude Include="browser.h" />
     <ClInclude Include="document.h" />
+    <ClInclude Include="ytdlp.h" />
     <None Include="fake_vtables.inc" />
     <ClInclude Include="screen.h" />
     <ClInclude Include="source.h" />
