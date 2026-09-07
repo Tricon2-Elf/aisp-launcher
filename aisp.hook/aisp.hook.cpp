@@ -195,13 +195,14 @@ HMODULE WINAPI HookLoadLibraryW(LPCWSTR lpLibFileName)
 // job so they die with the game; stderr of every tool goes to aisp.screen.log next to the game
 // executable.
 //
-// Optionally ([screens] primary_browser=electron, the default under Wine, where ieframe stays
-// black) a sibling Electron process is the page: it loads the rewritten screen URL, reports
-// document.title, and its BGRA is what OleDraw presents as the crop. IE is never navigated and
-// its engine never runs: IWebBrowser2::get_Document hands the client a document of the hook's
-// own (document.cpp) whose execScript runs the client's script in Electron and whose
-// getElementById / get_innerHTML fetch the element from Electron's page, so neither mshtml nor
-// Wine's Gecko is involved. The secondary compositor (electron: or ffmpeg) is unchanged — sites
+// By default ([screens] primary_browser=electron; ie keeps the client's own control, which
+// renders on the game thread and stays black under Wine) a sibling Electron process is the
+// page: it loads the rewritten screen URL, reports document.title, and its BGRA is what
+// OleDraw presents as the crop. IE is never navigated and its engine never runs:
+// IWebBrowser2::get_Document hands the client a document of the hook's own (document.cpp)
+// whose execScript runs the client's script in Electron and whose getElementById /
+// get_innerHTML fetch the element from Electron's page, so neither mshtml nor Wine's Gecko is
+// involved. The secondary compositor (electron: or ffmpeg) is unchanged — sites
 // refuse iframes, and streams need a real decoder. On Windows both primary and electron: are
 // aisp.electron\electron.exe over named pipes. On Wine they are a stock native Electron started
 // by aisp.electron/host.js over loopback TCP (Wine named pipes are not a Unix socket a Linux

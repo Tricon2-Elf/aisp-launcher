@@ -12,8 +12,7 @@ namespace aisp
 {
 // Whether ntdll exports wine_get_version; cached on the first call.
 bool IsRunningOnWine();
-// [screens] primary_browser (or AISP_PRIMARY_BROWSER): electron or ie. Default: ie on Windows,
-// electron under Wine, where ieframe stays black.
+// [screens] primary_browser (or AISP_PRIMARY_BROWSER): electron or ie. Default: electron.
 bool UsePrimaryBrowser();
 void InitBrowserMode();
 

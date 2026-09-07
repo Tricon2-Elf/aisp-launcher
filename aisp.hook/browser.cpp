@@ -104,17 +104,16 @@ void InitBrowserMode()
 {
     if (g_browserModeReady)
         return;
-    // electron or ie; the default is ie on Windows and electron under Wine, where ieframe stays
-    // black. Anything else reads as the default.
+    // electron or ie; the default is electron everywhere: it costs the game thread a bitmap copy
+    // per draw where ieframe rendered the page, and under Wine ieframe stays black anyway.
+    // Anything else reads as the default.
     const bool wine = IsRunningOnWine();
     wchar_t value[32] = {};
     ConfigString(L"AISP_PRIMARY_BROWSER", L"screens", L"primary_browser", value, 32);
-    if (_wcsicmp(value, L"electron") == 0)
-        g_usePrimaryBrowser = true;
-    else if (_wcsicmp(value, L"ie") == 0 || _wcsicmp(value, L"ieframe") == 0)
+    if (_wcsicmp(value, L"ie") == 0 || _wcsicmp(value, L"ieframe") == 0)
         g_usePrimaryBrowser = false;
     else
-        g_usePrimaryBrowser = wine;
+        g_usePrimaryBrowser = true;
     g_browserModeReady = true;
     if (wine)
     {

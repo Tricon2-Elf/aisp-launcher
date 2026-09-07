@@ -105,7 +105,7 @@ struct ScreenStream
     int sentScrollLock = -1;
     float sentScale = -1.0f;
     int sentMute = -1;
-    // Primary Electron (optional; the default under Wine): paints the screen page, reports its
+    // Primary Electron (the default; [screens] primary_browser=ie opts out): paints the page, reports its
     // title and answers the client's page reads (document.cpp), so ieframe neither draws nor
     // navigates. Secondary electron:/ffmpeg still composites.
     wchar_t pageUrl[4096] = {};          // rewritten screen URL this control navigated to
