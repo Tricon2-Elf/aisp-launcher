@@ -287,6 +287,191 @@ bool RequestNativeElectron(const char* line, char* error, size_t errorCount)
     }
     return true;
 }
+
+// Accepts one connection on a listening loopback socket, or gives up after `waitMs`.
+SOCKET AcceptLoopbackFor(SOCKET listenSock, DWORD waitMs)
+{
+    const ULONGLONG deadline = GetTickCount64() + waitMs;
+    while (GetTickCount64() < deadline)
+    {
+        fd_set readSet;
+        FD_ZERO(&readSet);
+        FD_SET(listenSock, &readSet);
+        timeval timeout = {};
+        timeout.tv_usec = 50000;
+        const int ready = select(static_cast<int>(listenSock) + 1, &readSet, nullptr, nullptr, &timeout);
+        if (ready <= 0)
+            continue;
+        SOCKET accepted = accept(listenSock, nullptr, nullptr);
+        if (accepted != INVALID_SOCKET)
+            return accepted;
+    }
+    return INVALID_SOCKET;
+}
+
+// The one Electron of this game: every screen (the primary pages and the electron: sources) is a
+// window in it, opened with a line on the hub channel. Started by the first screen that needs
+// it, in the job so it ends with the game (Windows) or when the hub channel closes (Wine, where
+// the native broker spawns it). A hub whose process is gone or whose channel breaks is dropped
+// and the next screen starts a fresh one.
+struct ElectronHub
+{
+    CRITICAL_SECTION lock;
+    bool lockReady = false;
+    HANDLE process = nullptr; // Windows: the host process; Wine: none (the broker's child)
+    HANDLE control = nullptr; // the hub channel, `open` lines go here
+    bool tcp = false;
+    LONG nextScreenId = 0;
+};
+ElectronHub g_hub;
+
+void EnsureHubLock()
+{
+    if (!g_hub.lockReady)
+    {
+        InitializeCriticalSection(&g_hub.lock);
+        g_hub.lockReady = true;
+    }
+}
+
+// Caller holds g_hub.lock.
+bool HubAlive()
+{
+    if (!g_hub.control)
+        return false;
+    if (g_hub.process && WaitForSingleObject(g_hub.process, 0) == WAIT_OBJECT_0)
+        return false;
+    return true;
+}
+
+// Caller holds g_hub.lock. Ends the host (if it is ours and still there) and forgets it.
+void DropHub(const char* why)
+{
+    if (g_hub.control || g_hub.process)
+    {
+        char note[200] = {};
+        StringCchPrintfA(note, 200, "browser host dropped: %s\r\n", why);
+        LogLine(note);
+    }
+    if (g_hub.control)
+        CloseBrowserChannel(g_hub.control, g_hub.tcp);
+    g_hub.control = nullptr;
+    if (g_hub.process)
+    {
+        if (WaitForSingleObject(g_hub.process, 0) != WAIT_OBJECT_0)
+            TerminateProcess(g_hub.process, 0);
+        CloseHandle(g_hub.process);
+        g_hub.process = nullptr;
+    }
+    g_hub.tcp = false;
+}
+
+// Caller holds g_hub.lock. Starts the host if there is none, and connects its hub channel.
+bool EnsureHub(wchar_t* error, size_t errorCount)
+{
+    if (HubAlive())
+        return true;
+    DropHub("gone");
+    const bool tcp = IsRunningOnWine();
+    if (tcp)
+    {
+        int port = 0;
+        SOCKET listenSock = ListenLoopback(&port);
+        if (listenSock == INVALID_SOCKET)
+        {
+            if (error)
+                StringCchCopyW(error, errorCount, L"browser: tcp listen failed");
+            return false;
+        }
+        char line[64] = {};
+        StringCchPrintfA(line, 64, "hub 127.0.0.1:%d\n", port);
+        char nativeError[256] = {};
+        if (!RequestNativeElectron(line, nativeError, 256))
+        {
+            closesocket(listenSock);
+            if (error)
+                MultiByteToWideChar(CP_UTF8, 0, nativeError, -1, error, static_cast<int>(errorCount));
+            return false;
+        }
+        SOCKET hub = AcceptLoopbackFor(listenSock, 15000);
+        closesocket(listenSock);
+        if (hub == INVALID_SOCKET)
+        {
+            if (error)
+                StringCchCopyW(error, errorCount, L"browser: the host did not connect its hub channel");
+            return false;
+        }
+        g_hub.control = reinterpret_cast<HANDLE>(hub);
+        g_hub.tcp = true;
+        g_hub.process = nullptr;
+    }
+    else
+    {
+        wchar_t browser[MAX_PATH] = {}, appPath[MAX_PATH] = {};
+        if (!ResolveElectronPaths(browser, MAX_PATH, appPath, MAX_PATH, error, errorCount))
+            return false;
+        wchar_t hubSpec[128] = {};
+        HANDLE hubListen = CreateNamedPipePair(hubSpec, 128, L"hub");
+        if (hubListen == INVALID_HANDLE_VALUE)
+        {
+            if (error)
+                StringCchCopyW(error, errorCount, L"browser: pipe creation failed");
+            return false;
+        }
+        wchar_t command[1024] = {};
+        StringCchPrintfW(command, 1024, L"\"%s\" \"%s\" --hub=\"%s\"", browser, appPath, hubSpec);
+        HANDLE process = LaunchBrowserHost(command);
+        if (!process)
+        {
+            CloseHandle(hubListen);
+            if (error)
+                StringCchCopyW(error, errorCount, L"browser host failed to start (see aisp.screen.log)");
+            return false;
+        }
+        // Electron's own start: allow it the full budget (160 tries of 50 ms). A host that ends
+        // meanwhile is the usual sign of an app older than this DLL (it wants --url, not --hub).
+        bool connected = false;
+        for (int i = 0; i < 160 && !connected; ++i)
+        {
+            if (ConnectNamedPipe(hubListen, nullptr) || GetLastError() == ERROR_PIPE_CONNECTED)
+            {
+                DWORD mode = PIPE_READMODE_BYTE | PIPE_WAIT;
+                SetNamedPipeHandleState(hubListen, &mode, nullptr, nullptr);
+                connected = true;
+                break;
+            }
+            if (WaitForSingleObject(process, 50) == WAIT_OBJECT_0)
+            {
+                DWORD code = 0;
+                GetExitCodeProcess(process, &code);
+                if (error)
+                    StringCchPrintfW(error, errorCount, L"browser host exited (code %lu) before connecting its hub channel: aisp.electron\\app\\main.js must be the one that came with this aisp.hook.dll", static_cast<unsigned long>(code));
+                break;
+            }
+        }
+        if (!connected)
+        {
+            if (WaitForSingleObject(process, 0) != WAIT_OBJECT_0)
+                TerminateProcess(process, 0);
+            CloseHandle(process);
+            CloseHandle(hubListen);
+            if (error && !error[0])
+                StringCchCopyW(error, errorCount, L"browser: the host did not connect its hub channel");
+            return false;
+        }
+        g_hub.control = hubListen;
+        g_hub.tcp = false;
+        g_hub.process = process;
+    }
+    LogLine("browser host started: one Electron for every screen\r\n");
+    return true;
+}
+
+// Caller holds g_hub.lock.
+bool HubSend(const char* line)
+{
+    return WriteBrowserChannel(g_hub.control, g_hub.tcp, line, std::strlen(line));
+}
 } // namespace
 
 bool StartElectronSession(const ElectronSessionRequest& request, wchar_t* error, size_t errorCount)
@@ -302,9 +487,11 @@ bool StartElectronSession(const ElectronSessionRequest& request, wchar_t* error,
         *request.outTcp = tcp;
     *request.outControl = nullptr;
     *request.outVideo = nullptr;
+    // The host is shared (see ElectronHub); no screen owns a process.
     if (request.outProcess)
         *request.outProcess = nullptr;
 
+    // This screen's own channels, listening before the host is told about them.
     wchar_t controlSpec[128] = {}, videoSpec[128] = {};
     HANDLE controlListen = INVALID_HANDLE_VALUE, videoListen = INVALID_HANDLE_VALUE;
     if (tcp)
@@ -326,43 +513,9 @@ bool StartElectronSession(const ElectronSessionRequest& request, wchar_t* error,
         StringCchPrintfW(videoSpec, 128, L"127.0.0.1:%d", videoPort);
         controlListen = reinterpret_cast<HANDLE>(controlSock);
         videoListen = reinterpret_cast<HANDLE>(videoSock);
-
-        char urlUtf8[4096] = {};
-        WideCharToMultiByte(CP_UTF8, 0, request.url, -1, urlUtf8, 4096, nullptr, nullptr);
-        char open[4600] = {};
-        StringCchPrintfA(
-            open,
-            4600,
-            "open width=%d height=%d fps=%d control=127.0.0.1:%d video=127.0.0.1:%d framed=%d scrollx=%d scrolly=%d hide=%d scale=%.4f mute=%d gain=%.4f url=%s\n",
-            request.width,
-            request.height,
-            request.fps > 0 ? request.fps : kDefaultFps,
-            controlPort,
-            videoPort,
-            request.framed ? 1 : 0,
-            request.scrollx,
-            request.scrolly,
-            request.hideScroll,
-            request.scale > 0 ? request.scale : 1.0f,
-            request.mute,
-            request.gain,
-            urlUtf8
-        );
-        char nativeError[256] = {};
-        if (!RequestNativeElectron(open, nativeError, 256))
-        {
-            CloseBrowserChannel(controlListen, true);
-            CloseBrowserChannel(videoListen, true);
-            if (error)
-                MultiByteToWideChar(CP_UTF8, 0, nativeError, -1, error, static_cast<int>(errorCount));
-            return false;
-        }
     }
     else
     {
-        wchar_t browser[MAX_PATH] = {}, appPath[MAX_PATH] = {};
-        if (!ResolveElectronPaths(browser, MAX_PATH, appPath, MAX_PATH, error, errorCount))
-            return false;
         controlListen = CreateNamedPipePair(controlSpec, 128, L"ctl");
         videoListen = CreateNamedPipePair(videoSpec, 128, L"vid");
         if (controlListen == INVALID_HANDLE_VALUE || videoListen == INVALID_HANDLE_VALUE)
@@ -375,38 +528,49 @@ bool StartElectronSession(const ElectronSessionRequest& request, wchar_t* error,
                 StringCchCopyW(error, errorCount, L"browser: pipe creation failed");
             return false;
         }
-        wchar_t command[4096] = {};
-        StringCchPrintfW(
-            command,
-            4096,
-            L"\"%s\" \"%s\" --width=%d --height=%d --fps=%d --scrollx=%d --scrolly=%d --hide-scrollbars=%d --scale=%.4f --mute=%d --gain=%.4f --framed=%d --control=\"%s\" --video=\"%s\" --url=\"%s\"",
-            browser,
-            appPath,
-            request.width,
-            request.height,
-            request.fps > 0 ? request.fps : kDefaultFps,
-            request.scrollx,
-            request.scrolly,
-            request.hideScroll,
-            request.scale > 0 ? request.scale : 1.0f,
-            request.mute,
-            request.gain,
-            request.framed ? 1 : 0,
-            controlSpec,
-            videoSpec,
-            request.url
-        );
-        HANDLE process = LaunchBrowserHost(command);
-        if (!process)
-        {
-            CloseHandle(controlListen);
-            CloseHandle(videoListen);
-            if (error)
-                StringCchCopyW(error, errorCount, L"browser host failed to start (see aisp.screen.log)");
-            return false;
-        }
-        if (request.outProcess)
-            *request.outProcess = process;
+    }
+
+    // The open line, to the shared host: the same words on both platforms (the channel names
+    // tell them apart), the url last since it may hold anything.
+    char urlUtf8[4096] = {};
+    WideCharToMultiByte(CP_UTF8, 0, request.url, -1, urlUtf8, 4096, nullptr, nullptr);
+    char open[4900] = {};
+    StringCchPrintfA(
+        open,
+        4900,
+        "open id=%ld width=%d height=%d fps=%d control=%ls video=%ls framed=%d scrollx=%d scrolly=%d hide=%d scale=%.4f mute=%d gain=%.4f url=%s\n",
+        InterlockedIncrement(&g_hub.nextScreenId),
+        request.width,
+        request.height,
+        request.fps > 0 ? request.fps : kDefaultFps,
+        controlSpec,
+        videoSpec,
+        request.framed ? 1 : 0,
+        request.scrollx,
+        request.scrolly,
+        request.hideScroll,
+        request.scale > 0 ? request.scale : 1.0f,
+        request.mute,
+        request.gain,
+        urlUtf8
+    );
+    EnsureHubLock();
+    EnterCriticalSection(&g_hub.lock);
+    bool opened = EnsureHub(error, errorCount) && HubSend(open);
+    if (!opened && g_hub.control)
+    {
+        // The channel broke under us: the host is gone; once more with a fresh one.
+        DropHub("hub channel write failed");
+        opened = EnsureHub(error, errorCount) && HubSend(open);
+    }
+    LeaveCriticalSection(&g_hub.lock);
+    if (!opened)
+    {
+        CloseBrowserChannel(controlListen, tcp);
+        CloseBrowserChannel(videoListen, tcp);
+        if (error && !error[0])
+            StringCchCopyW(error, errorCount, L"browser: the host did not take the open");
+        return false;
     }
 
     HANDLE control = nullptr, video = nullptr;
@@ -439,12 +603,6 @@ bool StartElectronSession(const ElectronSessionRequest& request, wchar_t* error,
                 StringCchCopyW(error, errorCount, L"browser: video pipe connect failed");
             CloseHandle(controlListen);
             CloseHandle(videoListen);
-            if (request.outProcess && *request.outProcess)
-            {
-                TerminateProcess(*request.outProcess, 0);
-                CloseHandle(*request.outProcess);
-                *request.outProcess = nullptr;
-            }
             return false;
         }
         if (!ConnectNamedPipeWait(controlListen, request.stop, 40))

@@ -10,10 +10,12 @@
 // control; with framed=1 headed messages carrying frames and text lines) can replace Electron: point
 // AISP_ELECTRON_NATIVE_BIN at it, or swap this file.
 //
-// Protocol, one line, url last:
+// Protocol, one line per connection:
+//   hub 127.0.0.1:N        start one Electron connected to the hook's hub channel; the hook then
+//                          opens every screen through that channel (aisp.electron/app/main.js)
 //   open width=486 height=343 fps=30 control=127.0.0.1:N video=127.0.0.1:N
 //        framed=0|1 scrollx=0 scrolly=0 hide=0 scale=1 mute=0 gain=1
-//        url=http://…
+//        url=http://…      the old form: one Electron for this one screen
 // Reply: ok\n  or  err <text>\n
 const net = require("net");
 const path = require("path");
@@ -76,6 +78,19 @@ function spawnSession(args) {
   child.unref();
 }
 
+function spawnHub(spec) {
+  if (!/^\d+\.\d+\.\d+\.\d+:\d+$/.test(spec))
+    throw new Error("hub needs 127.0.0.1:port");
+  const childArgs = ["--no-sandbox", appDir, `--hub=${spec}`, "--wine=1"];
+  log(`spawn ${electronBin} ${childArgs.join(" ")}`);
+  const child = spawn(electronBin, childArgs, {
+    stdio: "ignore",
+    detached: true,
+    env: process.env,
+  });
+  child.unref();
+}
+
 const server = net.createServer((socket) => {
   let leftover = "";
   socket.setEncoding("utf8");
@@ -92,9 +107,12 @@ const server = net.createServer((socket) => {
       if (!line)
         continue;
       try {
-        if (line.indexOf("open ") !== 0)
-          throw new Error("expected open");
-        spawnSession(parseOpen(line.slice(5)));
+        if (line.indexOf("hub ") === 0)
+          spawnHub(line.slice(4).trim());
+        else if (line.indexOf("open ") === 0)
+          spawnSession(parseOpen(line.slice(5)));
+        else
+          throw new Error("expected hub or open");
         socket.write("ok\n");
       } catch (error) {
         log(`err ${error.message}`);
