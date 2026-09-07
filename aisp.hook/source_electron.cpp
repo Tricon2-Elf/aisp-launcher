@@ -19,9 +19,26 @@ DWORD RunElectronSource(ScreenStream* stream)
 {
     wchar_t message[512] = {};
     const wchar_t* url = stream->source + 9;
+    wchar_t resolved[4096] = {};
+    if (url[0] == L'/' && url[1] != L'/')
+    {
+        // Root-relative: a page of the emulator's own (the YouTube embed page), at the origin
+        // the screen page came from, so the server need not know its public address.
+        const wchar_t* base = stream->pageUrl;
+        const wchar_t* scheme = std::wcsstr(base, L"://");
+        const wchar_t* pathStart = scheme ? std::wcschr(scheme + 3, L'/') : nullptr;
+        if (!scheme || !pathStart)
+        {
+            SetStatus(stream, L"browser: no screen page origin for a relative URL");
+            return 0;
+        }
+        StringCchCopyNW(resolved, 4096, base, pathStart - base);
+        StringCchCatW(resolved, 4096, url);
+        url = resolved;
+    }
     if (_wcsnicmp(url, L"http://", 7) != 0 && _wcsnicmp(url, L"https://", 8) != 0)
     {
-        SetStatus(stream, L"browser: expected http(s)://...");
+        SetStatus(stream, L"browser: expected http(s)://... or /path");
         return 0;
     }
 
