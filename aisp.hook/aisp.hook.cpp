@@ -1080,7 +1080,8 @@ void StopSession(ScreenStream* stream)
     }
     // The source thread first (its pipe closes with the process); the renderer's handle is
     // taken only once it is gone, since the source starts it. A wait that times out gets a
-    // log line: the workers all watch `stop`.
+    // log line: the workers all watch `stop`. A source blocked in a ReadFile whose pipe some
+    // other process still holds open would not see the flag; its read is cancelled outright.
     const ULONGLONG waitStart = GetTickCount64();
     HANDLE threads[2] = {};
     const char* names[2] = {"source", "audio renderer"};
@@ -1088,6 +1089,8 @@ void StopSession(ScreenStream* stream)
     threads[0] = stream->thread;
     stream->thread = nullptr;
     LeaveCriticalSection(&stream->lock);
+    if (threads[0])
+        CancelSynchronousIo(threads[0]);
     for (int i = 0; i < 2; ++i)
     {
         if (i == 1)

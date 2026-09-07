@@ -125,6 +125,69 @@ bool ToolPath(const wchar_t* variable, const wchar_t* key, const wchar_t* fallba
 
 // Starts a child with the given standard handles (nullptr = the log file / nothing) and puts it
 // in the job. The command line buffer is modified by CreateProcessW.
+namespace
+{
+// CreateProcess with inheritance on hands the child every inheritable handle in the process,
+// not just its std handles. Sessions start their tools concurrently, so a tool started while
+// another session held a pipe end open kept that pipe too: the other session's read never saw
+// EOF once its own tool had exited, its source thread sat in ReadFile until the stranger
+// ended, and the stop that joins it waited its whole timeout. The child gets an explicit handle
+// list instead: its own std handles, nothing else. Without the attribute (the list API failing)
+// it falls back to plain inheritance.
+HANDLE StartProcess(wchar_t* commandLine, STARTUPINFOW& startup)
+{
+    HANDLE handles[3] = {};
+    DWORD count = 0;
+    const HANDLE candidates[3] = {startup.hStdInput, startup.hStdOutput, startup.hStdError};
+    for (HANDLE candidate : candidates)
+    {
+        DWORD flags = 0;
+        if (!candidate || candidate == INVALID_HANDLE_VALUE || !GetHandleInformation(candidate, &flags) || !(flags & HANDLE_FLAG_INHERIT))
+            continue;
+        bool listed = false;
+        for (DWORD i = 0; i < count; ++i)
+            listed = listed || handles[i] == candidate;
+        if (!listed)
+            handles[count++] = candidate;
+    }
+
+    STARTUPINFOEXW extended = {};
+    extended.StartupInfo = startup;
+    extended.StartupInfo.cb = sizeof(extended);
+    SIZE_T size = 0;
+    InitializeProcThreadAttributeList(nullptr, 1, 0, &size);
+    LPPROC_THREAD_ATTRIBUTE_LIST list = size ? static_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(HeapAlloc(GetProcessHeap(), 0, size)) : nullptr;
+    DWORD flags = CREATE_NO_WINDOW;
+    bool listed = false;
+    if (list && count && InitializeProcThreadAttributeList(list, 1, 0, &size))
+    {
+        if (UpdateProcThreadAttribute(list, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, handles, count * sizeof(HANDLE), nullptr, nullptr))
+        {
+            extended.lpAttributeList = list;
+            flags |= EXTENDED_STARTUPINFO_PRESENT;
+            listed = true;
+        }
+        else
+            DeleteProcThreadAttributeList(list);
+    }
+    if (!listed)
+        extended.StartupInfo.cb = sizeof(STARTUPINFOW);
+
+    PROCESS_INFORMATION info = {};
+    const BOOL ok = CreateProcessW(nullptr, commandLine, nullptr, nullptr, TRUE, flags, nullptr, nullptr, &extended.StartupInfo, &info);
+    if (listed)
+        DeleteProcThreadAttributeList(list);
+    if (list)
+        HeapFree(GetProcessHeap(), 0, list);
+    if (!ok)
+        return nullptr;
+    if (g_job)
+        AssignProcessToJobObject(g_job, info.hProcess);
+    CloseHandle(info.hThread);
+    return info.hProcess;
+}
+} // namespace
+
 HANDLE LaunchTool(wchar_t* commandLine, HANDLE stdIn, HANDLE stdOut)
 {
     STARTUPINFOW startup = {};
@@ -133,14 +196,7 @@ HANDLE LaunchTool(wchar_t* commandLine, HANDLE stdIn, HANDLE stdOut)
     startup.hStdInput = stdIn ? stdIn : GetStdHandle(STD_INPUT_HANDLE);
     startup.hStdOutput = stdOut ? stdOut : g_toolLog;
     startup.hStdError = g_toolLog;
-
-    PROCESS_INFORMATION info = {};
-    if (!CreateProcessW(nullptr, commandLine, nullptr, nullptr, TRUE, CREATE_NO_WINDOW, nullptr, nullptr, &startup, &info))
-        return nullptr;
-    if (g_job)
-        AssignProcessToJobObject(g_job, info.hProcess);
-    CloseHandle(info.hThread);
-    return info.hProcess;
+    return StartProcess(commandLine, startup);
 }
 
 HANDLE LaunchBrowserHost(wchar_t* commandLine)
@@ -156,15 +212,9 @@ HANDLE LaunchBrowserHost(wchar_t* commandLine)
     startup.hStdInput = nul;
     startup.hStdOutput = nul;
     startup.hStdError = nul;
-    PROCESS_INFORMATION info = {};
-    const BOOL ok = CreateProcessW(nullptr, commandLine, nullptr, nullptr, TRUE, CREATE_NO_WINDOW, nullptr, nullptr, &startup, &info);
+    HANDLE process = StartProcess(commandLine, startup);
     CloseHandle(nul);
-    if (!ok)
-        return nullptr;
-    if (g_job)
-        AssignProcessToJobObject(g_job, info.hProcess);
-    CloseHandle(info.hThread);
-    return info.hProcess;
+    return process;
 }
 
 bool CreateInheritablePipe(HANDLE* readEnd, HANDLE* writeEnd, bool inheritRead)
