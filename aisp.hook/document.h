@@ -6,9 +6,12 @@
 //                    ("complete"), get_title, get_URL; the rest answers E_NOTIMPL
 //   IHTMLDocument3   getElementById: an element of the hook's own, or null when Electron's
 //                    page has no such id
-//   IHTMLWindow2     execScript: the client's script runs in Electron's page, one way
-//   IHTMLElement     get_innerHTML / get_innerText: one round trip to Electron for the
-//                    element's current innerHTML; get_id, get_tagName
+//   IHTMLWindow2     execScript: the client's script runs in Electron's page, one way;
+//                    scrollBy / scrollTo, the same way (the live player's viewport scroll)
+//   IHTMLElement     get_innerHTML / get_innerText and get_offsetLeft/Top/Width/Height: one
+//                    round trip to Electron at getElementById brings them all (the live player
+//                    lays its viewport out from the container's offsets before it draws);
+//                    get_id, get_tagName
 //   IViewObject2     Draw: the client's OleDraw lands in the hook's import hook first and paints
 //                    Electron's frame; what falls through to this Draw fills the rectangle black
 //

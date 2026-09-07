@@ -527,7 +527,10 @@ DWORD WINAPI WatchdogThread(LPVOID)
                 DebugLog(L"aisp.hook: screen idle, stream stopped: %s\n", stream->source);
             }
             if (stream->primaryActive && idle > kIdleStopMs)
+            {
+                LogLine("screen idle (no draw for 3 s): primary browser stopped\r\n");
                 StopPrimaryBrowser(stream);
+            }
             if (!stream->sessionActive && stream->ring && idle > kIdleFreeMs)
                 FreeRings(stream);
         }
@@ -1303,6 +1306,11 @@ void OnScreenNavigate(IWebBrowser2* browser, const wchar_t* url, const wchar_t* 
     LeaveCriticalSection(&g_streamsLock);
     if (found)
         identity->lpVtbl->Release(identity); // the entry already holds one
+    {
+        char note[1200] = {};
+        StringCchPrintfA(note, 1200, "screen navigate (%s entry): %ls\r\n", found ? "existing" : "new", url);
+        LogLine(note);
+    }
     StopSession(stream);
 
     // Crop rectangles the client copies out of the control (see the frame routine): live pages
@@ -1879,6 +1887,9 @@ HRESULT STDMETHODCALLTYPE HookOleClose(IOleObject* self, DWORD saveOption)
             if (stream)
             {
                 DebugLog(L"aisp.hook: screen closed: %s\n", stream->source);
+                char note[600] = {};
+                StringCchPrintfA(note, 600, "screen closed: %ls\r\n", stream->source);
+                LogLine(note);
                 StopSession(stream);
                 StopPrimaryBrowser(stream);
                 FreeRings(stream);

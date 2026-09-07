@@ -64,6 +64,7 @@ struct Element
     LONG refs;
     std::wstring id;
     std::wstring inner; // Electron's innerHTML at the time of getElementById
+    long left = 0, top = 0, width = 0, height = 0; // its offsetLeft/Top/Width/Height then
 };
 
 IHTMLDocument2Vtbl g_document2Vtbl;
@@ -235,7 +236,10 @@ HRESULT STDMETHODCALLTYPE Doc3_getElementById(IHTMLDocument3* self, BSTR id, IHT
         idJson += *c;
     }
     idJson += '"';
-    const std::string script = "(function(){var e=document.getElementById(" + idJson + ");return e?e.innerHTML:null})()";
+    // One round trip brings the element's offsets along with its innerHTML: the client's live
+    // player (mode 2) lays its viewport out from the container's offsets and the navi bar's
+    // height before it draws at all, and reads them right after getElementById.
+    const std::string script = "(function(){var e=document.getElementById(" + idJson + ");return e?e.offsetLeft+','+e.offsetTop+','+e.offsetWidth+','+e.offsetHeight+';'+e.innerHTML:null})()";
     char valueUtf8[16384] = {};
     LARGE_INTEGER frequency = {}, before = {}, after = {};
     QueryPerformanceFrequency(&frequency);
@@ -247,14 +251,26 @@ HRESULT STDMETHODCALLTYPE Doc3_getElementById(IHTMLDocument3* self, BSTR id, IHT
         CountPrimaryRead(stream, id, (after.QuadPart - before.QuadPart) * 1000.0 / frequency.QuadPart, have || loading);
     if (!have && std::wcscmp(id, L"statusForm") == 0 && (loading || !stream->primaryActive))
     {
-        StringCchCopyA(valueUtf8, sizeof(valueUtf8), "value=load (statusForm)");
+        StringCchCopyA(valueUtf8, sizeof(valueUtf8), "0,0,0,0;value=load (statusForm)");
         have = true;
     }
     if (!have)
         return S_OK;
+    long box[4] = {};
+    const char* html = valueUtf8;
+    if (const char* semicolon = std::strchr(valueUtf8, ';'))
+    {
+        if (sscanf(valueUtf8, "%ld,%ld,%ld,%ld", &box[0], &box[1], &box[2], &box[3]) == 4)
+            html = semicolon + 1;
+    }
     wchar_t value[16384] = {};
-    MultiByteToWideChar(CP_UTF8, 0, valueUtf8, -1, value, 16384);
-    *out = reinterpret_cast<IHTMLElement*>(NewElement(id, value));
+    MultiByteToWideChar(CP_UTF8, 0, html, -1, value, 16384);
+    Element* element = NewElement(id, value);
+    element->left = box[0];
+    element->top = box[1];
+    element->width = box[2];
+    element->height = box[3];
+    *out = reinterpret_cast<IHTMLElement*>(element);
     return S_OK;
 }
 
@@ -330,6 +346,28 @@ HRESULT STDMETHODCALLTYPE Win_execScript(IHTMLWindow2* self, BSTR code, BSTR, VA
     return S_OK;
 }
 
+// The live player scrolls the window by the navi bar's height once its viewport is laid out;
+// the page does the same scroll in Electron.
+void WindowScroll(IHTMLWindow2* self, const wchar_t* method, long x, long y)
+{
+    Window* window = reinterpret_cast<Window*>(self);
+    if (!window->document || !window->document->stream)
+        return;
+    wchar_t script[96] = {};
+    StringCchPrintfW(script, 96, L"window.%s(%ld,%ld)", method, x, y);
+    ForwardScriptToPrimary(window->document->stream, script);
+}
+HRESULT STDMETHODCALLTYPE Win_scrollBy(IHTMLWindow2* self, long x, long y)
+{
+    WindowScroll(self, L"scrollBy", x, y);
+    return S_OK;
+}
+HRESULT STDMETHODCALLTYPE Win_scrollTo(IHTMLWindow2* self, long x, long y)
+{
+    WindowScroll(self, L"scrollTo", x, y);
+    return S_OK;
+}
+
 HRESULT STDMETHODCALLTYPE Win_get_document(IHTMLWindow2* self, IHTMLDocument2** out)
 {
     if (!out)
@@ -394,6 +432,34 @@ HRESULT STDMETHODCALLTYPE El_get_tagName(IHTMLElement*, BSTR* out)
     *out = Bstr(L"DIV");
     return S_OK;
 }
+HRESULT STDMETHODCALLTYPE El_get_offsetLeft(IHTMLElement* self, long* out)
+{
+    if (!out)
+        return E_POINTER;
+    *out = reinterpret_cast<Element*>(self)->left;
+    return S_OK;
+}
+HRESULT STDMETHODCALLTYPE El_get_offsetTop(IHTMLElement* self, long* out)
+{
+    if (!out)
+        return E_POINTER;
+    *out = reinterpret_cast<Element*>(self)->top;
+    return S_OK;
+}
+HRESULT STDMETHODCALLTYPE El_get_offsetWidth(IHTMLElement* self, long* out)
+{
+    if (!out)
+        return E_POINTER;
+    *out = reinterpret_cast<Element*>(self)->width;
+    return S_OK;
+}
+HRESULT STDMETHODCALLTYPE El_get_offsetHeight(IHTMLElement* self, long* out)
+{
+    if (!out)
+        return E_POINTER;
+    *out = reinterpret_cast<Element*>(self)->height;
+    return S_OK;
+}
 
 Element* NewElement(const wchar_t* id, const wchar_t* inner)
 {
@@ -441,6 +507,8 @@ void InitVtables()
     g_windowVtbl.GetTypeInfoCount = Win_GetTypeInfoCount;
     g_windowVtbl.execScript = Win_execScript;
     g_windowVtbl.get_document = Win_get_document;
+    g_windowVtbl.scrollBy = Win_scrollBy;
+    g_windowVtbl.scrollTo = Win_scrollTo;
 
     FillStubs(g_elementVtbl);
     g_elementVtbl.QueryInterface = El_QueryInterface;
@@ -451,6 +519,10 @@ void InitVtables()
     g_elementVtbl.get_innerText = El_get_innerHTML;
     g_elementVtbl.get_id = El_get_id;
     g_elementVtbl.get_tagName = El_get_tagName;
+    g_elementVtbl.get_offsetLeft = El_get_offsetLeft;
+    g_elementVtbl.get_offsetTop = El_get_offsetTop;
+    g_elementVtbl.get_offsetWidth = El_get_offsetWidth;
+    g_elementVtbl.get_offsetHeight = El_get_offsetHeight;
 
     if (!g_documentsLockReady)
     {
