@@ -144,6 +144,7 @@ struct ScreenStream
     volatile LONG primaryStop = 0;
     int sentPrimaryMute = -1;
     float sentPrimaryGain = -1.0f;
+    int sentPrimaryPaint = -1;           // paint 0/1: whether the host produces frames at all
     ULONGLONG primaryRetryAt = 0;        // tick after which a failed start may be tried again
     bool electronTcp = false;            // Wine: secondary electron: uses loopback TCP, not a named pipe
     bool primaryTcp = false;
@@ -162,6 +163,16 @@ struct ScreenStream
     // top (the overlay-surface trick of the DirectDraw era).
     bool keyed = false;
     DWORD keyColor = 0;                  // 0x00RRGGBB
+    // clear=1 (or clear=rrggbb): the page is not shown at all. The crop is filled with the
+    // clear colour (by default the key colour, or the off-black the room TVs key on) and the
+    // video is put over it plainly, so the source is the only thing rendering; the primary
+    // Electron is told to stop painting meanwhile. A page sets it when its video box is the
+    // whole crop and nothing of its own is over the video; it is also what shows while a page
+    // reloads over a running source.
+    bool pageClear = false;
+    DWORD clearColor = 0;                // 0x00RRGGBB
+    HBRUSH clearBrush = nullptr;
+    DWORD clearBrushColor = 0;
     HDC keyDc = nullptr;
     HBITMAP keyBitmap = nullptr;
     HGDIOBJ keyOldBitmap = nullptr;

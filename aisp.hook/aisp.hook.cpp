@@ -1143,6 +1143,11 @@ void FreeRings(ScreenStream* stream)
         stream->keyBits = nullptr;
         stream->keyWidth = stream->keyHeight = 0;
     }
+    if (stream->clearBrush)
+    {
+        DeleteObject(stream->clearBrush);
+        stream->clearBrush = nullptr;
+    }
     delete[] stream->ring;
     delete[] stream->liveFrame;
     delete[] stream->livePresent;
@@ -1260,6 +1265,9 @@ IUnknown* IdentityOf(IUnknown* object)
 // gets an entry; what it plays, if anything, is decided by the page the server serves, which
 // publishes the source in its title (read by the OleDraw hook). `rewritten` is the emulator URL
 // IE is sent to, and the primary Electron host if that path is on.
+// The client makes a new control for every page (ATL navigates it once), so a screen entry
+// sees one navigation; a page's own reload never comes through here (the primary host holds
+// its title until the new page has run, and the hook's state stays as the last title said).
 void OnScreenNavigate(IWebBrowser2* browser, const wchar_t* url, const wchar_t* rewritten)
 {
     if (!url || !browser)
@@ -1332,6 +1340,7 @@ void OnScreenNavigate(IWebBrowser2* browser, const wchar_t* url, const wchar_t* 
     stream->pageScroll[0] = stream->pageScroll[1] = 0;
     stream->pageScrollLock = false;
     stream->pageScale = stream->sessionScale = 1.0f;
+    stream->pageClear = false;
     if (stream->html)
     {
         stream->html->lpVtbl->Release(stream->html);
@@ -1410,7 +1419,8 @@ ScreenStream* FindStream(IUnknown* document)
 
 // The page publishes "aisp:vol=<0-100>;mute=<0|1>[;src=<source>]" in its title: the volume and
 // mute whenever the client's ext_setVolume / ext_setMute reach it, the source as the server
-// decided when it served the page. Call under the stream lock.
+// decided when it served the page. The other keys (box, crop, key, clear, fps, scroll, scale,
+// rolloff, pan, the timeline) are the page's layout of that source. Call under the stream lock.
 void ApplyTitle(ScreenStream* stream, const wchar_t* title)
 {
     if (!title)
@@ -1429,6 +1439,28 @@ void ApplyTitle(ScreenStream* stream, const wchar_t* title)
         unsigned int key = 0;
         stream->keyed = keyText && swscanf(keyText + 5, L"%6x", &key) == 1;
         stream->keyColor = key & 0xFFFFFF;
+        // clear=1 takes the key colour (the off-black of the room TVs without one); clear=rrggbb
+        // names its own. Anything else, or none, shows the page.
+        const wchar_t* clearText = std::wcsstr(title, L";clear=");
+        stream->pageClear = false;
+        if (clearText)
+        {
+            const wchar_t* word = clearText + 7;
+            size_t length = 0;
+            while (word[length] && word[length] != L';')
+                ++length;
+            unsigned int colour = 0;
+            if (length == 1 && word[0] == L'1')
+            {
+                stream->pageClear = true;
+                stream->clearColor = stream->keyed ? stream->keyColor : 0x100010;
+            }
+            else if (length == 6 && swscanf(word, L"%6x", &colour) == 1)
+            {
+                stream->pageClear = true;
+                stream->clearColor = colour & 0xFFFFFF;
+            }
+        }
         int box[4] = {};
         const wchar_t* boxText = std::wcsstr(title, L";box=");
         if (boxText && swscanf(boxText + 5, L"%d,%d,%d,%d", &box[0], &box[1], &box[2], &box[3]) == 4 && box[2] > 0 && box[3] > 0
@@ -1562,6 +1594,19 @@ bool EnsureKeySurface(ScreenStream* stream, HDC reference)
     return true;
 }
 
+// The brush of the page's clear colour, kept while the colour stays. Caller holds stream->lock.
+HBRUSH ClearBrush(ScreenStream* stream)
+{
+    if (stream->clearBrush && stream->clearBrushColor == stream->clearColor)
+        return stream->clearBrush;
+    if (stream->clearBrush)
+        DeleteObject(stream->clearBrush);
+    const DWORD c = stream->clearColor;
+    stream->clearBrush = CreateSolidBrush(RGB((c >> 16) & 0xFF, (c >> 8) & 0xFF, c & 0xFF));
+    stream->clearBrushColor = c;
+    return stream->clearBrush ? stream->clearBrush : static_cast<HBRUSH>(GetStockObject(BLACK_BRUSH));
+}
+
 HRESULT WINAPI HookOleDraw(LPUNKNOWN unknown, DWORD aspect, HDC hdc, LPCRECT bounds)
 {
     ScreenStream* stream = g_screenVideoInitialised ? FindStream(unknown) : nullptr;
@@ -1604,6 +1649,7 @@ HRESULT WINAPI HookOleDraw(LPUNKNOWN unknown, DWORD aspect, HDC hdc, LPCRECT bou
     if (stream->sessionActive || stream->primaryActive)
         SendBrowserControl(stream);
     const bool havePage = UsePrimaryBrowser() && stream->pageReady && stream->pagePresent;
+    const bool clear = stream->pageClear;
     LeaveCriticalSection(&stream->lock);
     if (changed)
     {
@@ -1632,23 +1678,28 @@ HRESULT WINAPI HookOleDraw(LPUNKNOWN unknown, DWORD aspect, HDC hdc, LPCRECT bou
         // Also the restart after an idle stop (game minimised, or the TV came back).
         if (stream->source[0])
             StartSession(stream);
-        else if (!havePage)
+        else if (!havePage && !clear)
             return g_originalOleDraw(unknown, aspect, hdc, bounds); // the page is the content
     }
 
-    // Primary Electron paint replaces OleDraw of ieframe. Otherwise: when the video box is only
-    // part of the crop (the Stage wall's main LED), let the page draw itself first so the rest
-    // of the crop, the banner, still shows the page; a TV's video box is the whole crop, so the
-    // page draw is skipped there.
+    // clear: the page is not drawn at all, the crop is the clear colour under the video.
+    // Otherwise the primary Electron paint replaces OleDraw of ieframe; failing that, when the
+    // video box is only part of the crop (the Stage wall's main LED), let the page draw itself
+    // first so the rest of the crop, the banner, still shows the page; a TV's video box is the
+    // whole crop, so the page draw is skipped there.
     const int x = bounds->left + stream->x;
     const int y = bounds->top + stream->y;
     const bool videoFillsCrop = stream->videoX == 0 && stream->videoY == 0 && stream->videoWidth == stream->width && stream->videoHeight == stream->height;
+    const bool keyed = stream->keyed && !clear;
     EnterCriticalSection(&stream->lock);
-    const bool blitPage = havePage && BlitPrimaryPage(stream, hdc, x, y);
+    HBRUSH clearBrush = clear ? ClearBrush(stream) : nullptr;
+    const bool blitPage = !clear && havePage && BlitPrimaryPage(stream, hdc, x, y);
     LeaveCriticalSection(&stream->lock);
-    if (!blitPage)
+    if (clear)
+        FillRect(hdc, bounds, clearBrush);
+    else if (!blitPage)
     {
-        if (videoFillsCrop && !stream->keyed)
+        if (videoFillsCrop && !keyed)
             FillRect(hdc, bounds, static_cast<HBRUSH>(GetStockObject(BLACK_BRUSH)));
         else
             g_originalOleDraw(unknown, aspect, hdc, bounds);
@@ -1755,7 +1806,7 @@ HRESULT WINAPI HookOleDraw(LPUNKNOWN unknown, DWORD aspect, HDC hdc, LPCRECT bou
         info.bmiHeader.biBitCount = 32;
         info.bmiHeader.biCompression = BI_RGB;
         const int bx = x + stream->videoX, by = y + stream->videoY;
-        if (stream->keyed && EnsureKeySurface(stream, hdc))
+        if (keyed && EnsureKeySurface(stream, hdc))
         {
             // Read the page under the box, put video where it painted the key colour, write back.
             BitBlt(stream->keyDc, 0, 0, stream->videoWidth, stream->videoHeight, hdc, bx, by, SRCCOPY);
@@ -1777,7 +1828,7 @@ HRESULT WINAPI HookOleDraw(LPUNKNOWN unknown, DWORD aspect, HDC hdc, LPCRECT bou
     else
     {
         RECT videoBox = {x + stream->videoX, y + stream->videoY, x + stream->videoX + stream->videoWidth, y + stream->videoY + stream->videoHeight};
-        FillRect(hdc, &videoBox, static_cast<HBRUSH>(GetStockObject(BLACK_BRUSH)));
+        FillRect(hdc, &videoBox, clear ? clearBrush : static_cast<HBRUSH>(GetStockObject(BLACK_BRUSH)));
         SetBkMode(hdc, TRANSPARENT);
         SetTextColor(hdc, RGB(255, 255, 255));
         TextOutW(hdc, videoBox.left + 10, videoBox.top + 10, stream->source, static_cast<int>(std::wcslen(stream->source)));

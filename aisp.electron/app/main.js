@@ -3,7 +3,9 @@
 // script call replies on --video; eval/call on --control). The crop is the layout viewport, with
 // scroll/scale/hide and mute as live extras. BGRA of --width x --height on the --video channel
 // (latest-frame; drop if blocked) because Chromium helpers inherit stdout.
-// --control takes scroll/scale/hide/mute/gain. There is no PCM tap: mute is
+// --control takes scroll/scale/hide/mute/gain, and for the primary also paint (0 stops the
+// off-screen frames while the hook shows its clear colour; the page keeps running). There is
+// no PCM tap: mute is
 // webContents.setAudioMuted, and gain is applied inside the page -- the volume/rolloff fader
 // scales every media element (through the prototype accessor, so the site's own slider still
 // reads back what it set) and the AudioContext destination.
@@ -90,7 +92,7 @@ const framed = argInt("--framed", 0) ? 1 : 0;
 // The channel protocol the hook expects; bump both sides together when the format changes. The
 // app announces itself as the first framed message so a stale copy shows up in aisp.screen.log.
 const PROTOCOL = 2;
-const APP_VERSION = `aisp.electron app 2026-09-07b (protocol ${PROTOCOL})`;
+const APP_VERSION = `aisp.electron app 2026-09-07c (protocol ${PROTOCOL})`;
 const wine = argInt("--wine", 0) ? 1 : 0;
 
 const state = {
@@ -100,6 +102,7 @@ const state = {
   scale: Math.max(0.1, argFloat("--scale", 1)),
   muted: argInt("--mute", 0) ? 1 : 0,
   gain: Math.min(1, Math.max(0, argFloat("--gain", 1))),
+  paint: 1,
 };
 
 if (!url) {
@@ -160,8 +163,13 @@ function sendText(text) {
   sink.write(framedMessage(2, Buffer.from(String(text).replace(/[\r\n]/g, " "), "utf8")));
 }
 
+// A page's title is reported once its own script has run (dom-ready), not as the document
+// parses: the served <title> is only the source, the page adds its layout to it, and the hook
+// acts on the first title it sees after a navigation. Live updates follow from then on.
+let titleHold = true;
+
 function sendTitle(title) {
-  if (title != null)
+  if (title != null && !titleHold)
     sendText(`title ${title}`);
 }
 
@@ -322,6 +330,21 @@ function pushGain() {
   }, 40);
 }
 
+// Off-screen painting on or off; a page that comes back is repainted whole, its damage from
+// the meantime is gone.
+function applyPaint(changed) {
+  if (!browserWindow || browserWindow.isDestroyed())
+    return;
+  const contents = browserWindow.webContents;
+  if (state.paint) {
+    contents.startPainting();
+    if (changed)
+      contents.invalidate();
+  } else {
+    contents.stopPainting();
+  }
+}
+
 function applyView() {
   if (!browserWindow || browserWindow.isDestroyed())
     return;
@@ -329,6 +352,7 @@ function applyView() {
   const scale = state.scale > 0 ? state.scale : 1;
   contents.setZoomFactor(scale);
   contents.setAudioMuted(!!state.muted);
+  applyPaint(false);
   contents.executeJavaScript(scrollScript()).catch((error) => log(`scroll script failed: ${error.message}`));
   installVolume();
 }
@@ -365,6 +389,16 @@ function applyLine(line) {
   if (mute) {
     state.muted = Number.parseInt(mute[1], 10) ? 1 : 0;
     scheduleApply();
+    return;
+  }
+  const paint = /^paint\s+(-?\d+)/.exec(line);
+  if (paint) {
+    const value = Number.parseInt(paint[1], 10) ? 1 : 0;
+    const changed = value !== state.paint;
+    state.paint = value;
+    if (changed)
+      log(`paint ${value}`);
+    applyPaint(changed);
     return;
   }
   if (line.startsWith("eval ")) {
@@ -503,23 +537,38 @@ app.whenReady().then(() => {
       writeLatest(bitmap);
   });
   contents.on("did-start-navigation", (_event, _navUrl, isInPlace, isMainFrame) => {
-    if (isMainFrame && !isInPlace)
+    if (isMainFrame && !isInPlace) {
       pageLoading = true;
+      titleHold = true;
+    }
   });
   contents.on("did-finish-load", () => {
     pageLoading = false;
+    titleHold = false;
     applyView();
     sendTitle(browserWindow.getTitle());
-    log(`loaded ${url}`);
+    log(`loaded ${contents.getURL()}`);
   });
   contents.on("page-title-updated", (_event, title) => sendTitle(title));
   contents.on("did-navigate", () => scheduleApply());
   contents.on("did-frame-navigate", () => installVolume());
-  contents.on("dom-ready", () => installVolume());
+  contents.on("dom-ready", () => {
+    // The page's inline script has run: its title is complete, and the hook is waiting on it
+    // (a slow frame page must not hold the stream back until the load event).
+    titleHold = false;
+    sendTitle(browserWindow.getTitle());
+    installVolume();
+  });
   volumeTimer = setInterval(installVolume, 500);
   contents.on("did-fail-load", (_event, code, description, failedUrl, isMainFrame) => {
-    if (isMainFrame)
-      pageLoading = false;
+    // -3 is ERR_ABORTED: a navigation superseded by the next one, which is loading now.
+    if (!isMainFrame || code === -3)
+      return;
+    pageLoading = false;
+    titleHold = false;
+    // A page that did not come has nothing to say: the hook is told so, and stops what the
+    // last page had playing rather than keeping it up under an error page.
+    sendText("title aisp:");
     log(`load failed ${code}: ${description} (${failedUrl})`);
   });
   contents.on("render-process-gone", (_event, details) =>

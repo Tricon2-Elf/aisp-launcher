@@ -486,6 +486,16 @@ void SendPrimaryControl(ScreenStream* stream)
         WriteBrowserChannel(stream->primaryControl, stream->primaryTcp, line, std::strlen(line));
         stream->sentPrimaryMute = mute;
     }
+    // Under the clear colour nothing of the page is shown, so it need not be painted either;
+    // the page itself keeps running (title, the client's reads).
+    const int paint = stream->pageClear ? 0 : 1;
+    if (paint != stream->sentPrimaryPaint)
+    {
+        char line[32] = {};
+        StringCchPrintfA(line, 32, "paint %d\n", paint);
+        WriteBrowserChannel(stream->primaryControl, stream->primaryTcp, line, std::strlen(line));
+        stream->sentPrimaryPaint = paint;
+    }
     const float sent = stream->sentPrimaryGain;
     if (sent >= 0.0f && gain > sent - 0.002f && gain < sent + 0.002f)
         return;
@@ -605,6 +615,7 @@ void StopPrimaryBrowser(ScreenStream* stream)
     stream->pageReady = false;
     stream->sentPrimaryMute = -1;
     stream->sentPrimaryGain = -1.0f;
+    stream->sentPrimaryPaint = -1;
     // A call still waiting gets its answer: none.
     stream->primaryCallOk = false;
     stream->primaryCallLoading = false;
@@ -678,6 +689,7 @@ void StartPrimaryBrowser(ScreenStream* stream, const wchar_t* url)
     stream->electronTitleNew = false;
     stream->sentPrimaryMute = -1;
     stream->sentPrimaryGain = -1.0f;
+    stream->sentPrimaryPaint = -1;
     if (!stream->primaryCallEvent)
         stream->primaryCallEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
     StringCchCopyW(stream->pageUrl, 4096, url);
