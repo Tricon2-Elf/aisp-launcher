@@ -1194,6 +1194,7 @@ void StartSession(ScreenStream* stream)
         if (!stream->livePresent)
             stream->livePresent = new BYTE[stream->frameBytes]();
         stream->liveReady = false;
+        stream->livePresented = false;
     }
     else if (!stream->ring)
     {
@@ -1733,8 +1734,12 @@ HRESULT WINAPI HookOleDraw(LPUNKNOWN unknown, DWORD aspect, HDC hdc, LPCRECT bou
     {
         if (stream->liveReady && stream->livePresent)
         {
-            if (!stream->paused)
+            // Paused holds the frame shown, but a session that starts paused still gets its first.
+            if (!stream->paused || !stream->livePresented)
+            {
                 std::memcpy(stream->livePresent, stream->liveFrame, stream->frameBytes);
+                stream->livePresented = true;
+            }
             shown = stream->livePresent;
             stream->playing = true;
         }

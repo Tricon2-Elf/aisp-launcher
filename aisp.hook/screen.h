@@ -79,6 +79,7 @@ struct ScreenStream
     BYTE* livePresent = nullptr;
     bool liveVideo = false;              // the browser source: blit the latest paint, no ffmpeg-style queue
     bool liveReady = false;
+    bool livePresented = false;          // livePresent holds a frame (a paused start still shows one)
     DWORD frameBytes = 0;
     int capacity = 0;
     LONGLONG videoWritten = 0;
