@@ -160,6 +160,7 @@
     <ClCompile Include="browser.cpp" />
     <ClCompile Include="document.cpp" />
     <ClCompile Include="ytdlp.cpp" />
+    <ClCompile Include="page_state.cpp" />
     <ClCompile Include="screen.cpp" />
     <ClCompile Include="source.cpp" />
     <ClCompile Include="source_electron.cpp" />

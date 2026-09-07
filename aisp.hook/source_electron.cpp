@@ -1,7 +1,9 @@
 // Off-screen browser host: electron:<http(s) url>. On Windows this is aisp.electron\electron.exe
 // over named pipes. On Wine the hook listens on loopback TCP and aisp.electron/host.js starts
 // a stock native Electron with the same app — Wine named pipes are not a Unix socket a Linux
-// Node can connect to. Paint is latest-frame BGRA; live scroll/scale/mute/gain on control.
+// Node can connect to. Paint is latest-frame BGRA on the framed channel, which also carries the
+// page's title (kept as the stream's media title, for the primary page); live
+// scroll/scale/mute/gain on control.
 #include "source.h"
 #include "browser.h"
 
@@ -51,6 +53,7 @@ DWORD RunElectronSource(ScreenStream* stream)
     request.scale = scale;
     request.mute = mute;
     request.gain = gain;
+    request.framed = true;
     request.stop = &stream->stop;
     request.outControl = &controlPipe;
     request.outVideo = &videoPipe;
@@ -70,28 +73,50 @@ DWORD RunElectronSource(ScreenStream* stream)
     SendBrowserControl(stream);
 
     SetStatus(stream, L"browser: loading");
-    BYTE* view = new BYTE[viewBytes];
-    BYTE* window = cropped ? new BYTE[stream->frameBytes] : nullptr;
-    bool first = true;
-    while (!stream->stop)
+    struct Reader
     {
-        if (!ReadFully(videoPipe, view, viewBytes, &stream->stop))
-            break;
-        if (first)
+        ScreenStream* stream;
+        BYTE* window;
+        int boxW, boxH, viewW, viewH;
+        bool first;
+    } reader = {stream, cropped ? new BYTE[stream->frameBytes] : nullptr, boxW, boxH, viewW, viewH, true};
+    FramedSink sink;
+    sink.context = &reader;
+    sink.onFrame = [](void* context, const BYTE* view, DWORD) {
+        Reader* r = static_cast<Reader*>(context);
+        if (r->first)
         {
-            SetStatus(stream, L"browser");
-            first = false;
+            SetStatus(r->stream, L"browser");
+            r->first = false;
         }
-        EnterCriticalSection(&stream->lock);
-        const int cx = stream->pageCrop[0] > 0 ? stream->pageCrop[2] : 0;
-        const int cy = stream->pageCrop[0] > 0 ? stream->pageCrop[3] : 0;
-        LeaveCriticalSection(&stream->lock);
-        if (window)
-            CopyCropWindow(window, boxW, boxH, view, viewW, viewH, cx, cy);
-        PushLiveFrame(stream, window ? window : view);
-    }
-    delete[] window;
-    delete[] view;
+        EnterCriticalSection(&r->stream->lock);
+        const int cx = r->stream->pageCrop[0] > 0 ? r->stream->pageCrop[2] : 0;
+        const int cy = r->stream->pageCrop[0] > 0 ? r->stream->pageCrop[3] : 0;
+        LeaveCriticalSection(&r->stream->lock);
+        if (r->window)
+            CopyCropWindow(r->window, r->boxW, r->boxH, view, r->viewW, r->viewH, cx, cy);
+        PushLiveFrame(r->stream, r->window ? r->window : view);
+    };
+    sink.onText = [](void* context, const char* text) {
+        Reader* r = static_cast<Reader*>(context);
+        if (std::strncmp(text, "title ", 6) == 0)
+        {
+            // The page's own document.title, as it changes: the primary page is told (page_state.cpp).
+            EnterCriticalSection(&r->stream->lock);
+            MultiByteToWideChar(CP_UTF8, 0, text + 6, -1, r->stream->mediaTitle, 512);
+            LeaveCriticalSection(&r->stream->lock);
+        }
+        else if (std::strncmp(text, "failed ", 7) == 0)
+        {
+            wchar_t message[512] = {};
+            MultiByteToWideChar(CP_UTF8, 0, text + 7, -1, message, 480);
+            wchar_t status[512] = {};
+            StringCchPrintfW(status, 512, L"browser: load failed: %s", message);
+            SetStatus(r->stream, status);
+        }
+    };
+    ReadFramedChannel(videoPipe, &stream->stop, viewBytes, "browser", sink);
+    delete[] reader.window;
     CloseHandle(videoPipe);
     if (!stream->stop)
         SetStatus(stream, L"browser host ended (see aisp.screen.log)");

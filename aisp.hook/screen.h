@@ -158,6 +158,17 @@ struct ScreenStream
     double sessionStart = 0, sessionOffset = 0; // the timeline the running session was started for
     double seekSeconds = 0;              // where the running session was told to begin
     bool paused = false;                 // presenter and renderer hold
+    // What the page is told about the media (page_state.cpp pushes it into the primary as
+    // window.aisp): the title yt-dlp knows or a browser secondary's own document.title, the
+    // duration, and where the current run of the media began, so that the position is
+    // runSeek + (videoPos - runStartFrame) / fps (a looped video's next run starts over).
+    wchar_t mediaTitle[512] = {};
+    double mediaDuration = 0;            // seconds; 0 unknown or live
+    double runSeek = 0;
+    LONGLONG runStartFrame = 0;
+    ULONGLONG statePushedAt = 0;
+    ULONGLONG stateLoggedAt = 0;
+    char stateSent[3072] = {};           // the last object pushed; the same one is not sent again
     // Colour keying: when the page names a key colour, only the pixels of the page that are
     // exactly that colour receive video; anything else the page draws inside the box stays on
     // top (the overlay-surface trick of the DirectDraw era).

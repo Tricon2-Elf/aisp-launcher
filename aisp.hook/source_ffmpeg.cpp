@@ -245,6 +245,10 @@ bool RunFfmpegOnce(ScreenStream* stream, LONGLONG* frames)
         stream->seekSeconds = TimelinePosition(stream, duration);
         if (duration > 0 && stream->seekSeconds > duration - kNearEndSeconds)
             stream->seekSeconds = 0;
+        EnterCriticalSection(&stream->lock);
+        StringCchCopyW(stream->mediaTitle, 512, info.title);
+        stream->mediaDuration = duration;
+        LeaveCriticalSection(&stream->lock);
         // URLs that lapse before this run reaches the loop point are refreshed in the background.
         if (duration > 0)
             RefreshYtdlpIfExpiring(pageUrl, duration - stream->seekSeconds + 60.0);
@@ -278,6 +282,11 @@ bool RunFfmpegOnce(ScreenStream* stream, LONGLONG* frames)
     if (stream->stop)
         return false;
 
+    // This run's frames start at the ring's current end and at the seek: the page's position.
+    EnterCriticalSection(&stream->lock);
+    stream->runSeek = stream->seekSeconds;
+    stream->runStartFrame = stream->videoWritten;
+    LeaveCriticalSection(&stream->lock);
     SetStatus(stream, L"ffmpeg: starting");
     // ffmpeg describes its input and outputs in aisp.screen.log (a dozen lines per session,
     // progress stats off); [tools] ffmpeg_loglevel or AISP_FFMPEG_LOGLEVEL overrides, e.g. debug.

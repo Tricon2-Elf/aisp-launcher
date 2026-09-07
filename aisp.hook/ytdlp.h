@@ -16,11 +16,12 @@ struct YtdlpInfo
     double expires = 0;                  // unix seconds the media URLs are good until; 0 unknown
     int urlCount = 0;                    // one muxed, or video then audio
     wchar_t urls[2][2048] = {};
+    wchar_t title[512] = {};             // the video's title as the site has it
     bool fromCache = false;
 };
 
-// The media URLs and duration for a page URL: from the cache while its URLs are valid, else by
-// running yt-dlp (seconds) and storing the result. `stream` gets the status line meanwhile.
+// The media URLs, duration and title for a page URL: from the cache while its URLs are valid,
+// else by running yt-dlp (seconds) and storing the result. `stream` gets the status line meanwhile.
 bool ResolveYtdlp(ScreenStream* stream, const wchar_t* pageUrl, YtdlpInfo& out);
 // Runs yt-dlp for the page URL on a background thread when the cached media URLs lapse within
 // `withinSeconds`, so the next resolve (the loop restart) finds fresh ones. No-op otherwise.

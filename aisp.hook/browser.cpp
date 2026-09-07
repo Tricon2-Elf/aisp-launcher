@@ -58,6 +58,12 @@ void SetElectronTitle(ScreenStream* stream, const wchar_t* title)
     StringCchCopyW(stream->electronTitle, 1024, title ? title : L"");
     stream->electronTitleNew = true;
     LeaveCriticalSection(&stream->lock);
+    if (g_logStats)
+    {
+        char line[1200] = {};
+        StringCchPrintfA(line, 1200, "primary title: %ls\r\n", title ? title : L"");
+        LogLine(line);
+    }
 }
 
 // aisp.electron\electron.exe ([tools] electron) with the app folder beside it.
@@ -505,6 +511,19 @@ void SendPrimaryControl(ScreenStream* stream)
     stream->sentPrimaryGain = gain;
 }
 
+void SendPrimaryEval(ScreenStream* stream, const char* utf8Script)
+{
+    if (!stream || !stream->primaryControl || !utf8Script || !utf8Script[0])
+        return;
+    std::string line("eval ");
+    line += utf8Script;
+    for (char& c : line)
+        if (c == '\r' || c == '\n')
+            c = ' ';
+    line += '\n';
+    WriteBrowserChannel(stream->primaryControl, stream->primaryTcp, line.data(), line.size());
+}
+
 void ForwardScriptToPrimary(ScreenStream* stream, const wchar_t* script)
 {
     if (!stream || !stream->primaryControl || !script || !script[0])
@@ -797,6 +816,16 @@ void HandlePrimaryText(ScreenStream* stream, const char* text)
         SetElectronTitle(stream, title);
         return;
     }
+    if (std::strncmp(text, "failed ", 7) == 0)
+    {
+        // The page did not come: it has nothing to say, so what the last page had playing stops
+        // rather than staying up under an error page.
+        char note[600] = {};
+        StringCchPrintfA(note, 600, "primary browser: load failed: %s\r\n", text + 7);
+        LogLine(note);
+        SetElectronTitle(stream, L"aisp:");
+        return;
+    }
     const bool ret = std::strncmp(text, "ret ", 4) == 0;
     const bool err = std::strncmp(text, "err ", 4) == 0;
     if (!ret && !err)
@@ -828,6 +857,84 @@ void HandlePrimaryText(ScreenStream* stream, const char* text)
     LeaveCriticalSection(&stream->lock);
 }
 } // namespace
+
+bool ReadFramedChannel(HANDLE video, volatile LONG* stop, DWORD frameBytes, const char* tag, const FramedSink& sink)
+{
+    constexpr DWORD kMaxText = 64 * 1024;
+    constexpr int kProtocol = 2;
+    BYTE* frame = new BYTE[frameBytes];
+    std::string text;
+    bool first = true;
+    bool accepted = false;
+    while (!*stop)
+    {
+        BYTE header[8] = {};
+        if (!ReadFully(video, header, 8, stop))
+            break;
+        DWORD type = 0, length = 0;
+        std::memcpy(&type, header, 4);
+        std::memcpy(&length, header + 4, 4);
+        if (first)
+        {
+            first = false;
+            bool hello = type == 2 && length > 6 && length < kMaxText;
+            if (hello)
+            {
+                text.assign(length, '\0');
+                hello = ReadFully(video, reinterpret_cast<BYTE*>(&text[0]), length, stop) && std::strncmp(text.c_str(), "hello ", 6) == 0;
+            }
+            int protocol = 0;
+            if (hello)
+            {
+                if (const char* p = std::strstr(text.c_str(), "(protocol "))
+                    protocol = std::atoi(p + 10);
+                char line[700] = {};
+                StringCchPrintfA(line, 700, "%s: %s; hook protocol %d\r\n", tag, text.c_str() + 6, kProtocol);
+                LogLine(line);
+            }
+            if (!hello || protocol != kProtocol)
+            {
+                char line[400] = {};
+                StringCchPrintfA(line, 400, hello ? "%s: the aisp.electron app speaks another protocol than this aisp.hook.dll; install the aisp.electron\\app\\main.js that came with the DLL\r\n"
+                                                  : "%s: the aisp.electron app sent no hello, it is a stale copy writing bare frames; install the aisp.electron\\app\\main.js that came with this aisp.hook.dll\r\n", tag);
+                LogLine(line);
+                break;
+            }
+            accepted = true;
+            continue;
+        }
+        if (type == 1 && length == frameBytes)
+        {
+            if (!ReadFully(video, frame, frameBytes, stop))
+                break;
+            if (sink.onFrame)
+                sink.onFrame(sink.context, frame, frameBytes);
+        }
+        else if (type == 2 && length < kMaxText)
+        {
+            text.assign(length, '\0');
+            if (length && !ReadFully(video, reinterpret_cast<BYTE*>(&text[0]), length, stop))
+                break;
+            if (sink.onText)
+                sink.onText(sink.context, text.c_str());
+        }
+        else
+        {
+            BYTE skip[4096];
+            bool ok = true;
+            while (length && ok)
+            {
+                const DWORD chunk = length > sizeof(skip) ? sizeof(skip) : length;
+                ok = ReadFully(video, skip, chunk, stop);
+                length -= chunk;
+            }
+            if (!ok)
+                break;
+        }
+    }
+    delete[] frame;
+    return accepted;
+}
 
 bool CallPrimary(ScreenStream* stream, const char* script, char* out, size_t outCount, DWORD timeoutMs, bool* loading)
 {
@@ -941,77 +1048,11 @@ DWORD WINAPI PrimaryVideoThread(LPVOID parameter)
     StringCchPrintfA(started, 700, "primary browser: %dx%d %s\r\n", width, height, urlUtf8);
     LogLine(started);
 
-    // Framed: an 8-byte header (type, length) before each message. 1 is a frame of the view
-    // size, 2 a text line; anything else is skipped by its length. The first message is the
-    // app's hello with its protocol number; an app that sends something else is a stale copy
-    // writing bare frames, and there is no reading those.
-    constexpr DWORD kMaxText = 64 * 1024;
-    constexpr int kProtocol = 2;
-    BYTE* frame = new BYTE[pageBytes];
-    std::string text;
-    bool first = true;
-    while (!stream->primaryStop)
-    {
-        BYTE header[8] = {};
-        if (!ReadFully(video, header, 8, &stream->primaryStop))
-            break;
-        DWORD type = 0, length = 0;
-        std::memcpy(&type, header, 4);
-        std::memcpy(&length, header + 4, 4);
-        if (first)
-        {
-            first = false;
-            bool hello = type == 2 && length > 6 && length < kMaxText;
-            if (hello)
-            {
-                text.assign(length, '\0');
-                hello = ReadFully(video, reinterpret_cast<BYTE*>(&text[0]), length, &stream->primaryStop) && std::strncmp(text.c_str(), "hello ", 6) == 0;
-            }
-            int protocol = 0;
-            if (hello)
-            {
-                if (const char* p = std::strstr(text.c_str(), "(protocol "))
-                    protocol = std::atoi(p + 10);
-                char line[700] = {};
-                StringCchPrintfA(line, 700, "primary browser: %s; hook protocol %d\r\n", text.c_str() + 6, kProtocol);
-                LogLine(line);
-            }
-            if (!hello || protocol != kProtocol)
-            {
-                LogLine(hello ? "primary browser: the aisp.electron app speaks another protocol than this aisp.hook.dll; install the aisp.electron\\app\\main.js that came with the DLL\r\n"
-                              : "primary browser: the aisp.electron app sent no hello, it is a stale copy writing bare frames; install the aisp.electron\\app\\main.js that came with this aisp.hook.dll\r\n");
-                break;
-            }
-            continue;
-        }
-        if (type == 1 && length == pageBytes)
-        {
-            if (!ReadFully(video, frame, pageBytes, &stream->primaryStop))
-                break;
-            PushPageFrame(stream, frame, pageBytes);
-        }
-        else if (type == 2 && length < kMaxText)
-        {
-            text.assign(length, '\0');
-            if (length && !ReadFully(video, reinterpret_cast<BYTE*>(&text[0]), length, &stream->primaryStop))
-                break;
-            HandlePrimaryText(stream, text.c_str());
-        }
-        else
-        {
-            BYTE skip[4096];
-            bool ok = true;
-            while (length && ok)
-            {
-                const DWORD chunk = length > sizeof(skip) ? sizeof(skip) : length;
-                ok = ReadFully(video, skip, chunk, &stream->primaryStop);
-                length -= chunk;
-            }
-            if (!ok)
-                break;
-        }
-    }
-    delete[] frame;
+    FramedSink sink;
+    sink.context = stream;
+    sink.onFrame = [](void* context, const BYTE* frame, DWORD bytes) { PushPageFrame(static_cast<ScreenStream*>(context), frame, bytes); };
+    sink.onText = [](void* context, const char* text) { HandlePrimaryText(static_cast<ScreenStream*>(context), text); };
+    ReadFramedChannel(video, &stream->primaryStop, pageBytes, "primary browser", sink);
     if (!stream->primaryStop)
         LogLine("primary browser: host ended (see aisp.screen.log)\r\n");
     return 0;

@@ -41,6 +41,23 @@ struct ElectronSessionRequest
 };
 bool StartElectronSession(const ElectronSessionRequest& request, wchar_t* error, size_t errorCount);
 
+// Reads a framed video channel until it ends or `stop` is set: an 8-byte header (type, length)
+// before each message, 1 a frame of exactly frameBytes, 2 a UTF-8 text line, anything else
+// skipped. The first message must be the app's hello with the hook's protocol number; a stale
+// app (bare frames, or another protocol) is logged under `tag` and false is returned at once.
+struct FramedSink
+{
+    void* context = nullptr;
+    void (*onFrame)(void* context, const BYTE* frame, DWORD bytes) = nullptr;
+    void (*onText)(void* context, const char* text) = nullptr;
+};
+bool ReadFramedChannel(HANDLE video, volatile LONG* stop, DWORD frameBytes, const char* tag, const FramedSink& sink);
+// Sends a script to run in the primary's page (one line; no reply).
+void SendPrimaryEval(ScreenStream* stream, const char* utf8Script);
+// page_state.cpp: what the page is told about its stream (window.aisp), pushed on change at
+// most twice a second. Call from the draw, without the stream lock.
+void PushPageState(ScreenStream* stream);
+
 // One off-screen Electron on the rewritten screen URL, crop-sized, reporting document.title.
 void StartPrimaryBrowser(ScreenStream* stream, const wchar_t* url);
 void StopPrimaryBrowser(ScreenStream* stream);

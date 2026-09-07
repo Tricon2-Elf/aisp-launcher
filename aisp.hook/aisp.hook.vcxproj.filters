@@ -49,6 +49,9 @@
     <ClCompile Include="ytdlp.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="page_state.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="screen.h">

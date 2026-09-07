@@ -109,6 +109,8 @@ bool ReadCache(const wchar_t* pageUrl, YtdlpInfo& info, double* fetched)
             info.duration = std::strtod(cursor + 9, nullptr);
         else if (std::strncmp(cursor, "expires ", 8) == 0)
             info.expires = std::strtod(cursor + 8, nullptr);
+        else if (std::strncmp(cursor, "title ", 6) == 0)
+            MultiByteToWideChar(CP_UTF8, 0, cursor + 6, -1, info.title, 512);
         else if (std::strncmp(cursor, "media ", 6) == 0 && info.urlCount < 2)
         {
             if (MultiByteToWideChar(CP_UTF8, 0, cursor + 6, -1, info.urls[info.urlCount], 2048) > 0)
@@ -136,6 +138,12 @@ void WriteCache(const wchar_t* pageUrl, const YtdlpInfo& info)
     if (WideCharToMultiByte(CP_UTF8, 0, pageUrl, -1, utf8, sizeof(utf8), nullptr, nullptr) <= 0)
         return;
     StringCchPrintfA(text, sizeof(text), "aisp yt-dlp cache 1\nurl %s\nfetched %.0f\nduration %.3f\nexpires %.0f\n", utf8, UnixNow(), info.duration, info.expires);
+    if (info.title[0] && WideCharToMultiByte(CP_UTF8, 0, info.title, -1, utf8, sizeof(utf8), nullptr, nullptr) > 0)
+    {
+        StringCchCatA(text, sizeof(text), "title ");
+        StringCchCatA(text, sizeof(text), utf8);
+        StringCchCatA(text, sizeof(text), "\n");
+    }
     for (int i = 0; i < info.urlCount; ++i)
     {
         if (WideCharToMultiByte(CP_UTF8, 0, info.urls[i], -1, utf8, sizeof(utf8), nullptr, nullptr) <= 0)
@@ -155,7 +163,8 @@ void WriteCache(const wchar_t* pageUrl, const YtdlpInfo& info)
         DeleteFileW(temp);
 }
 
-// Runs yt-dlp: the media URLs (one muxed, or video and audio apart) and the duration, one per line.
+// Runs yt-dlp: the media URLs (one muxed, or video and audio apart) one per line, then one line
+// of "<duration>\t<title>" (one template, so an empty title cannot shift the lines).
 bool RunYtdlp(const wchar_t* pageUrl, YtdlpInfo& info, wchar_t* error, size_t errorCount)
 {
     wchar_t ytdlp[MAX_PATH] = {};
@@ -165,7 +174,7 @@ bool RunYtdlp(const wchar_t* pageUrl, YtdlpInfo& info, wchar_t* error, size_t er
         return false;
     }
     wchar_t command[4096] = {};
-    StringCchPrintfW(command, 4096, L"\"%s\" --no-warnings -f \"bv*[height<=480]+ba/b[height<=480]/b\" --print urls --print duration \"%s\"", ytdlp, pageUrl);
+    StringCchPrintfW(command, 4096, L"\"%s\" --no-warnings -f \"bv*[height<=480]+ba/b[height<=480]/b\" --print urls --print \"%%(duration)s\t%%(title)s\" \"%s\"", ytdlp, pageUrl);
     wchar_t lines[3][2048] = {};
     const int count = RunToolForLines(command, lines[0], 2048, 3);
     info = YtdlpInfo();
@@ -174,7 +183,11 @@ bool RunYtdlp(const wchar_t* pageUrl, YtdlpInfo& info, wchar_t* error, size_t er
         if (_wcsnicmp(lines[i], L"http", 4) == 0 && info.urlCount < 2)
             StringCchCopyW(info.urls[info.urlCount++], 2048, lines[i]);
         else if (i == count - 1)
+        {
             info.duration = wcstod(lines[i], nullptr); // "NA" for a live stream reads as 0
+            if (const wchar_t* tab = std::wcschr(lines[i], L'\t'))
+                StringCchCopyW(info.title, 512, tab + 1);
+        }
     }
     if (info.urlCount == 0)
     {

@@ -4,8 +4,12 @@
 // scroll/scale/hide and mute as live extras. BGRA of --width x --height on the --video channel
 // (latest-frame; drop if blocked) because Chromium helpers inherit stdout.
 // --control takes scroll/scale/hide/mute/gain, and for the primary also paint (0 stops the
-// off-screen frames while the hook shows its clear colour; the page keeps running). There is
-// no PCM tap: mute is
+// off-screen frames while the hook shows its clear colour; the page keeps running) and eval,
+// through which the hook keeps window.aisp in the page up to date (the stream's title,
+// duration, position and state; see the hook's page_state.cpp). Both the primary and the
+// electron: secondaries run framed: the video channel carries frames, the page's title as it
+// changes, a `failed` line for a main frame that did not load, and the primary's call
+// replies. There is no PCM tap: mute is
 // webContents.setAudioMuted, and gain is applied inside the page -- the volume/rolloff fader
 // scales every media element (through the prototype accessor, so the site's own slider still
 // reads back what it set) and the AudioContext destination.
@@ -92,7 +96,7 @@ const framed = argInt("--framed", 0) ? 1 : 0;
 // The channel protocol the hook expects; bump both sides together when the format changes. The
 // app announces itself as the first framed message so a stale copy shows up in aisp.screen.log.
 const PROTOCOL = 2;
-const APP_VERSION = `aisp.electron app 2026-09-07c (protocol ${PROTOCOL})`;
+const APP_VERSION = `aisp.electron app 2026-09-08a (protocol ${PROTOCOL})`;
 const wine = argInt("--wine", 0) ? 1 : 0;
 
 const state = {
@@ -566,9 +570,8 @@ app.whenReady().then(() => {
       return;
     pageLoading = false;
     titleHold = false;
-    // A page that did not come has nothing to say: the hook is told so, and stops what the
-    // last page had playing rather than keeping it up under an error page.
-    sendText("title aisp:");
+    // The hook decides what a page that did not come means: for the primary, nothing to play.
+    sendText(`failed ${code} ${description}`);
     log(`load failed ${code}: ${description} (${failedUrl})`);
   });
   contents.on("render-process-gone", (_event, details) =>

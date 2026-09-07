@@ -1173,6 +1173,10 @@ void StartSession(ScreenStream* stream)
     stream->titlePoll = 0;
     stream->underruns = stream->videoWaits = stream->videoDrops = stream->audioWaits = stream->audioDrops = 0;
     stream->liveVideo = IsBrowserSource(stream->source);
+    stream->mediaTitle[0] = L'\0';
+    stream->mediaDuration = 0;
+    stream->runSeek = 0;
+    stream->runStartFrame = 0;
     stream->sentScroll[0] = stream->sentScroll[1] = 0x7FFFFFFF;
     stream->sentScrollLock = -1;
     stream->sentScale = -1.0f;
@@ -1651,6 +1655,7 @@ HRESULT WINAPI HookOleDraw(LPUNKNOWN unknown, DWORD aspect, HDC hdc, LPCRECT bou
     const bool havePage = UsePrimaryBrowser() && stream->pageReady && stream->pagePresent;
     const bool clear = stream->pageClear;
     LeaveCriticalSection(&stream->lock);
+    PushPageState(stream);
     if (changed)
     {
         StopSession(stream);

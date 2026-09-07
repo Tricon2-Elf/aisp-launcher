@@ -277,6 +277,12 @@ DWORD RunPatternSource(ScreenStream* stream)
         stream->seekSeconds = TimelinePosition(stream, kPatternVodSeconds);
         frame = static_cast<LONGLONG>(stream->seekSeconds * fps);
     }
+    EnterCriticalSection(&stream->lock);
+    StringCchCopyW(stream->mediaTitle, 512, vod ? L"aisp test pattern (vod)" : L"aisp test pattern (live)");
+    stream->mediaDuration = vod ? kPatternVodSeconds : 0;
+    stream->runSeek = stream->seekSeconds;
+    stream->runStartFrame = stream->videoWritten;
+    LeaveCriticalSection(&stream->lock);
     const bool cropped = stream->crop[0] > 0;
     const int w = cropped ? stream->crop[0] : stream->videoWidth, h = cropped ? stream->crop[1] : stream->videoHeight;
     const DWORD pictureBytes = static_cast<DWORD>(w) * static_cast<DWORD>(h) * 4;
