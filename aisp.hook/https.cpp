@@ -1,6 +1,7 @@
 // HTTPS for the client's web traffic. Configured by [web] in aisp.hook.ini (config.h): on by
-// itself for an endpoint whose host in connection.txt is one of https_hosts (aisp.moe and
-// example.com unless changed), or forced on or off for both; the environment overrides either way.
+// itself for an endpoint whose host in connection.txt is one of https_hosts (aisp.moe,
+// example.com and nbspou.net unless changed), or forced on or off for both; the environment
+// overrides either way.
 //
 // The client reaches its web endpoints in two ways, neither of which can do TLS:
 //
@@ -23,7 +24,10 @@
 //     That object collects the request the client writes, performs it over WinHTTP on a worker
 //     thread, and hands the reply text to the session's onRecv and onClose on the game's thread,
 //     from the session's own state poll or from a PeekMessageW import hook, where VCE's poll would
-//     have delivered it. Nothing in the
+//     have delivered it. Unless [web] upload_hook=0 this happens for plain-HTTP hosts as well, with
+//     the replay on port 80: the reply and the close then always arrive together, which the
+//     client's uploader needs (its previous instance's close landing during the next upload wipes
+//     that upload's job), whatever the server does with the connection. Nothing in the
 //     client's own request writer, parser or state machine changes, and no socket is involved.
 //
 // The screen base built in aisp.hook.cpp follows [screens] https, auto against the same
@@ -82,6 +86,7 @@ PeekMessageW_t g_originalPeekMessageW = nullptr;
 // Per endpoint: download.php goes through WinINet, upload.php through the client's VCE stream.
 bool g_downloadTls = false;
 bool g_uploadTls = false;
+bool g_uploadHook = true;  // [web] upload_hook: the uploader's stream is the hook's even for plain HTTP
 bool g_insecure = false;
 bool g_flagsRead = false;
 Switch g_switch = Switch::Auto;
@@ -136,7 +141,7 @@ bool HostMatchesDomain(const wchar_t* host, size_t hostLength, const wchar_t* do
 
 // The hosts that serve their endpoints over TLS, so the hook turns HTTPS on for them without
 // being asked: [web] https_hosts, a comma-separated list of domains, subdomains included;
-// aisp.moe and example.com when not set. A host may carry a :port from a hand-edited connection.txt.
+// aisp.moe, example.com and nbspou.net when not set. A host may carry a :port from a hand-edited connection.txt.
 bool IsHttpsHost(const wchar_t* host)
 {
     size_t hostLength = std::wcslen(host);
@@ -144,7 +149,7 @@ bool IsHttpsHost(const wchar_t* host)
         hostLength = static_cast<size_t>(colon - host);
     wchar_t list[1024] = {};
     if (!ConfigString(L"AISP_HTTPS_HOSTS", L"web", L"https_hosts", list, 1024))
-        StringCchCopyW(list, 1024, L"aisp.moe,example.com");
+        StringCchCopyW(list, 1024, L"aisp.moe,example.com,nbspou.net");
     const wchar_t* entry = list;
     while (*entry)
     {
@@ -182,6 +187,7 @@ void ReadFlags()
         break;
     }
     g_insecure = ConfigSwitch(L"AISP_HTTPS_INSECURE", L"web", L"insecure") == Switch::On;
+    g_uploadHook = ConfigSwitch(L"AISP_UPLOAD_HOOK", L"web", L"upload_hook") != Switch::Off;
 
     wchar_t base[1024] = {};
     if (ConfigString(L"AISP_WEB_BASE", L"web", L"base", base, 1024))
@@ -427,16 +433,16 @@ struct Response
     std::string body;
 };
 
-// One request to https://<host>/<target>. The host may carry a :port from a hand-edited
-// connection.txt; TLS goes to 443 regardless, the way the client always used 80.
-bool Forward(const Request& request, const std::string& body, Response& response)
+// One request to <host>/<target>, over TLS on 443 or plain on 80 as `tls` says. The host may
+// carry a :port from a hand-edited connection.txt; it is ignored, the way the client always used 80.
+bool Forward(const Request& request, const std::string& body, bool tls, Response& response)
 {
     std::string hostOnly = request.host;
     if (size_t colon = hostOnly.find(':'); colon != std::string::npos)
         hostOnly.resize(colon);
     std::wstring host = Widen(hostOnly), target = Widen(request.target), method = Widen(request.method);
-    WORD port = INTERNET_DEFAULT_HTTPS_PORT;
-    bool secure = true;
+    WORD port = tls ? INTERNET_DEFAULT_HTTPS_PORT : INTERNET_DEFAULT_HTTP_PORT;
+    bool secure = tls;
     if (WebBaseSet())
     {
         host = g_webBase.host;
@@ -610,9 +616,11 @@ DWORD WINAPI UploadWorker(LPVOID parameter)
         if (WebBaseSet())
             LogF(L"aisp.hook: https: upload.php: sending to the [web] base, %s", (g_webBase.directory + Leaf(Widen(request.target).c_str())).c_str());
         else
-            LogF(L"aisp.hook: https: upload.php: sending to https://%s", Widen(request.host + request.target).c_str());
-        if (!Forward(request, body, response))
-            response.body = "<result status=\"fail\"><error><code>502</code><description>aisp.hook could not reach the server over HTTPS</description></error></result>";
+            LogF(g_uploadTls ? L"aisp.hook: https: upload.php: sending to https://%s" : L"aisp.hook: https: upload.php: sending to http://%s", Widen(request.host + request.target).c_str());
+        if (!Forward(request, body, g_uploadTls, response))
+            response.body = g_uploadTls
+                ? "<result status=\"fail\"><error><code>502</code><description>aisp.hook could not reach the server over HTTPS</description></error></result>"
+                : "<result status=\"fail\"><error><code>502</code><description>aisp.hook could not reach the server</description></error></result>";
         LogN(L"aisp.hook: https: upload.php: server answered %u", response.status);
     }
     else
@@ -822,7 +830,7 @@ void LogEndpoint(const wchar_t* name, char hostLine, char pathLine, bool tls, co
         std::wmemmove(path, path + 1, std::wcslen(path));
     wchar_t list[1024] = {};
     if (!ConfigString(L"AISP_HTTPS_HOSTS", L"web", L"https_hosts", list, 1024))
-        StringCchCopyW(list, 1024, L"aisp.moe,example.com");
+        StringCchCopyW(list, 1024, L"aisp.moe,example.com,nbspou.net");
     const bool automatic = g_switch == Switch::Auto && !WebBaseSet();
     const wchar_t* why = WebBaseSet() ? L"[web] base" : g_switch == Switch::On ? L"[web] https=1" : g_switch == Switch::Off ? L"[web] https=0" : (IsHttpsHost(host) ? L"host in https_hosts" : L"host not in https_hosts");
     wchar_t target[1024] = {};
@@ -831,7 +839,8 @@ void LogEndpoint(const wchar_t* name, char hostLine, char pathLine, bool tls, co
     else
         StringCchPrintfW(target, 1024, L"%s://%s/%s", tls ? L"https" : L"http", host, path);
     wchar_t line[2048] = {};
-    StringCchPrintfW(line, 2048, L"aisp.hook: https: %s: %s (%s%s%s) -> %s", name, tls ? L"TLS" : L"plain HTTP, as the client does it", why, automatic ? L", https_hosts=" : L"", automatic ? list : L"", target);
+    const bool hooked = tls || (std::wcscmp(name, L"upload.php") == 0 && g_uploadHook);
+    StringCchPrintfW(line, 2048, L"aisp.hook: https: %s: %s (%s%s%s) -> %s", name, tls ? L"TLS" : hooked ? L"plain HTTP through the hook" : L"plain HTTP, as the client does it", why, automatic ? L", https_hosts=" : L"", automatic ? list : L"", target);
     Log(line);
 }
 } // namespace
@@ -867,8 +876,8 @@ void PatchHttps()
         if (!connectPatched || !openPatched || !optionPatched)
             Log(L"aisp.hook: https: WinINet imports not all found; download.php stays as the client does it");
     }
-    if (g_uploadTls && !PatchUpload())
-        Log(L"aisp.hook: https: the VCE connect slot or PeekMessageW was not where this client build has them; upload.php stays plain HTTP");
+    if ((g_uploadTls || g_uploadHook) && !PatchUpload())
+        Log(L"aisp.hook: https: the VCE connect slot or PeekMessageW was not where this client build has them; upload.php stays as the client does it");
     if ((g_downloadTls || g_uploadTls) && g_insecure)
         Log(L"aisp.hook: https: [web] insecure=1, certificates are not checked");
 }

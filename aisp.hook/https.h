@@ -15,7 +15,8 @@ bool HttpsEnabled();
 // means when the host is one of [web] https_hosts.
 bool ScreensHttpsEnabled(const wchar_t* host);
 
-// Patches the game executable's WinINet imports for download.php and CAIProtoAuth's connect
-// slot for upload.php, each only when its endpoint is on; logs one line per endpoint either way.
+// Patches the game executable's WinINet imports for download.php when that endpoint is TLS,
+// and the VCE core's connect slot for upload.php when it is TLS or [web] upload_hook is on (the
+// default); logs one line per endpoint either way.
 void PatchHttps();
 } // namespace aisp
