@@ -185,6 +185,9 @@ extern ScreenStream* g_streams;
 extern CRITICAL_SECTION g_streamsLock;
 extern HANDLE g_job;
 extern HANDLE g_toolLog;
+// aisp.screen.log next to the game, opened on first use (inheritable: the tools' stderr goes
+// there too). Invalid when the game directory cannot be written.
+HANDLE OpenScreenLog();
 extern bool g_screenVideoInitialised;
 extern HANDLE g_watchdog;
 extern bool g_logStats;
@@ -196,9 +199,9 @@ bool BuildGameFilePath(const wchar_t* fileName, wchar_t* outPath, size_t outPath
 // The line the screen shows while a source has nothing to draw yet (or failed).
 void SetStatus(ScreenStream* stream, const wchar_t* text);
 
-// Child processes: resolved from an environment variable or the game directory, attached to
-// the job so they die with the game, stderr to the log.
-bool ToolPath(const wchar_t* variable, const wchar_t* fallback, wchar_t* out, size_t outCount);
+// Child processes: resolved from [tools] in aisp.hook.ini, an environment variable, or the game
+// directory; attached to the job so they die with the game, stderr to the log.
+bool ToolPath(const wchar_t* variable, const wchar_t* key, const wchar_t* fallback, wchar_t* out, size_t outCount);
 HANDLE LaunchTool(wchar_t* commandLine, HANDLE stdIn, HANDLE stdOut);
 bool CreateInheritablePipe(HANDLE* readEnd, HANDLE* writeEnd, bool inheritRead);
 bool RunToolForLine(wchar_t* commandLine, wchar_t* out, size_t outCount);

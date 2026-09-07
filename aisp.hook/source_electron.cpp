@@ -31,14 +31,14 @@ bool ConnectPipe(HANDLE pipe, int tries = 160)
 }
 } // namespace
 
-// aisp.electron\electron.exe next to the game (AISP_ELECTRON overrides), with the app folder
+// aisp.electron\electron.exe next to the game ([tools] electron or AISP_ELECTRON overrides), with the app folder
 // beside it.
 DWORD RunElectronSource(ScreenStream* stream)
 {
     wchar_t browser[MAX_PATH] = {};
     wchar_t appPath[MAX_PATH] = {};
     wchar_t message[512] = {};
-    if (!ToolPath(L"AISP_ELECTRON", L"aisp.electron\\electron.exe", browser, MAX_PATH))
+    if (!ToolPath(L"AISP_ELECTRON", L"electron", L"aisp.electron\\electron.exe", browser, MAX_PATH))
     {
         StringCchPrintfW(message, 512, L"browser host not found: %s", browser);
         SetStatus(stream, message);

@@ -10,9 +10,10 @@
 // final URL.
 //
 // Tools: a streamlink install in the game directory (streamlink\bin\streamlink.exe and its
-// bundled streamlink\ffmpeg\ffmpeg.exe) and yt-dlp\yt-dlp.exe there; AISP_STREAMLINK, AISP_YTDLP and
-// AISP_FFMPEG override the paths.
+// bundled streamlink\ffmpeg\ffmpeg.exe) and yt-dlp\yt-dlp.exe there; [tools] in aisp.hook.ini (or
+// AISP_STREAMLINK, AISP_YTDLP and AISP_FFMPEG) overrides the paths.
 #include "source.h"
+#include "config.h"
 
 #include <strsafe.h>
 #include <cstring>
@@ -146,7 +147,7 @@ bool RunFfmpegOnce(ScreenStream* stream, LONGLONG* frames)
     wchar_t command[4096] = {};
     wchar_t message[512] = {};
 
-    if (!ToolPath(L"AISP_FFMPEG", L"streamlink\\ffmpeg\\ffmpeg.exe", ffmpeg, MAX_PATH))
+    if (!ToolPath(L"AISP_FFMPEG", L"ffmpeg", L"streamlink\\ffmpeg\\ffmpeg.exe", ffmpeg, MAX_PATH))
     {
         StringCchPrintfW(message, 512, L"ffmpeg not found: %s", ffmpeg);
         SetStatus(stream, message);
@@ -165,7 +166,7 @@ bool RunFfmpegOnce(ScreenStream* stream, LONGLONG* frames)
     if (viaStreamlink)
     {
         const wchar_t* pageUrl = stream->source + 11;
-        if (ToolPath(L"AISP_STREAMLINK", L"streamlink\\bin\\streamlink.exe", streamlink, MAX_PATH))
+        if (ToolPath(L"AISP_STREAMLINK", L"streamlink", L"streamlink\\bin\\streamlink.exe", streamlink, MAX_PATH))
         {
             StringCchPrintfW(message, 512, L"streamlink: %s", pageUrl);
             SetStatus(stream, message);
@@ -197,7 +198,7 @@ bool RunFfmpegOnce(ScreenStream* stream, LONGLONG* frames)
             ffmpegInput = readEnd;
             StringCchCopyW(input, 2048, L"pipe:0");
         }
-        else if (ToolPath(L"AISP_YTDLP", L"yt-dlp\\yt-dlp.exe", ytdlp, MAX_PATH))
+        else if (ToolPath(L"AISP_YTDLP", L"ytdlp", L"yt-dlp\\yt-dlp.exe", ytdlp, MAX_PATH))
         {
             StringCchPrintfW(message, 512, L"yt-dlp: resolving %s", pageUrl);
             SetStatus(stream, message);
@@ -227,7 +228,7 @@ bool RunFfmpegOnce(ScreenStream* stream, LONGLONG* frames)
         // which support range requests, so ffmpeg seeks to the shared timeline's position
         // before reading a byte of the rest.
         const wchar_t* pageUrl = stream->source + 7;
-        if (!ToolPath(L"AISP_YTDLP", L"yt-dlp\\yt-dlp.exe", ytdlp, MAX_PATH))
+        if (!ToolPath(L"AISP_YTDLP", L"ytdlp", L"yt-dlp\\yt-dlp.exe", ytdlp, MAX_PATH))
         {
             StringCchPrintfW(message, 512, L"yt-dlp not found: %s", ytdlp);
             SetStatus(stream, message);
@@ -286,9 +287,9 @@ bool RunFfmpegOnce(ScreenStream* stream, LONGLONG* frames)
 
     SetStatus(stream, L"ffmpeg: starting");
     // ffmpeg describes its input and outputs in aisp.screen.log (a dozen lines per session,
-    // progress stats off); AISP_FFMPEG_LOGLEVEL overrides, e.g. debug or warning.
+    // progress stats off); [tools] ffmpeg_loglevel or AISP_FFMPEG_LOGLEVEL overrides, e.g. debug.
     wchar_t logLevel[32] = {};
-    if (GetEnvironmentVariableW(L"AISP_FFMPEG_LOGLEVEL", logLevel, 32) == 0 || !logLevel[0])
+    if (!ConfigString(L"AISP_FFMPEG_LOGLEVEL", L"tools", L"ffmpeg_loglevel", logLevel, 32))
         StringCchCopyW(logLevel, 32, L"info");
     HANDLE outRead = nullptr, outWrite = nullptr;
     if (!CreateInheritablePipe(&outRead, &outWrite, false))

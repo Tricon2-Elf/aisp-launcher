@@ -36,7 +36,7 @@ namespace aisp
 //  - the state: the refresh feeds the toggle the TV's comment byte (1 = shown), which would draw
 //    the second image, the hidden glyph, while comments show. Its feed for this one button
 //    (0x647DB2) is routed through a stub that inverts the byte, so the button shows the current
-//    state the way mute does. AISP_TV_COMMENT_HIDDEN_IMAGE overrides the 200.
+//    state the way mute does.
 //  - the frames: the sheet (texture 343, interface/main/edit_window03.dds) draws this button's
 //    mousedown frames as a preview of the other state rather than the shifted glyph every other
 //    button uses, and the hidden state's hover frame sits two pixels too high in its cell. The
@@ -134,11 +134,7 @@ void PatchTvCommentButton()
         return;
     }
 
-    DWORD hiddenImage = 200;
-    wchar_t setting[16] = {};
-    if (GetEnvironmentVariableW(L"AISP_TV_COMMENT_HIDDEN_IMAGE", setting, 16) > 0 && setting[0])
-        hiddenImage = static_cast<DWORD>(_wtoi(setting));
-    g_commentHiddenImage = hiddenImage;
+    g_commentHiddenImage = 200;
 
     BYTE* stubs = static_cast<BYTE*>(VirtualAlloc(nullptr, 128, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
     if (!stubs)
@@ -190,7 +186,7 @@ void PatchTvCommentButton()
     // Second image: push 190 -> push <hidden image> in the panel's create.
     BYTE expectedPush[] = {0x68, 0xBE, 0x00, 0x00, 0x00};
     BYTE newPush[] = {0x68, 0, 0, 0, 0};
-    std::memcpy(newPush + 1, &hiddenImage, 4);
+    std::memcpy(newPush + 1, &g_commentHiddenImage, 4);
     if (!PatchBytes(0x647C07, expectedPush, newPush, sizeof(newPush)))
     {
         OutputDebugStringW(L"aisp.hook: TV comment button: create call differs, not patched\n");
