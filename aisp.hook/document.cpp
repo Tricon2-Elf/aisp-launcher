@@ -247,8 +247,9 @@ HRESULT STDMETHODCALLTYPE Doc3_getElementById(IHTMLDocument3* self, BSTR id, IHT
     bool loading = false;
     bool have = CallPrimary(stream, script.c_str(), valueUtf8, sizeof(valueUtf8), 250, &loading);
     QueryPerformanceCounter(&after);
+    stream->lastRead = GetTickCount64();
     if (g_logStats)
-        CountPrimaryRead(stream, id, (after.QuadPart - before.QuadPart) * 1000.0 / frequency.QuadPart, have || loading);
+        CountPrimaryRead(stream, id, (after.QuadPart - before.QuadPart) * 1000.0 / frequency.QuadPart, have || loading, loading);
     if (!have && std::wcscmp(id, L"statusForm") == 0 && (loading || !stream->primaryActive))
     {
         StringCchCopyA(valueUtf8, sizeof(valueUtf8), "0,0,0,0;value=load (statusForm)");

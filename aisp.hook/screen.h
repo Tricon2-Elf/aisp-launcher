@@ -138,6 +138,7 @@ struct ScreenStream
     DWORD primaryReadsOther = 0;         // every other id (the retX getters)
     DWORD primaryEvals = 0;              // execScript forwarded
     DWORD primaryReadsFailed = 0;        // timed out or no value
+    DWORD primaryReadsLoading = 0;       // answered "loading": the page was not there yet
     double primaryWaitMs = 0;            // game thread time spent waiting for replies
     double primaryWaitMaxMs = 0;
     ULONGLONG primaryStatsAt = 0;
@@ -232,6 +233,7 @@ struct ScreenStream
     bool sessionActive = false;
     ULONGLONG sessionStarted = 0;
     ULONGLONG lastDraw = 0;
+    ULONGLONG lastRead = 0;              // the client's last page read (document.cpp): the screen is in use even unseen
     LONG underruns = 0;                  // audio ran dry (playback held) since the session started
     LONG videoWaits = 0;                 // reader held because the frame ring was full
     LONG videoDrops = 0;                 // oldest frames discarded while audio could not drive playback yet

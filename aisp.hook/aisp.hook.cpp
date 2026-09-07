@@ -520,7 +520,10 @@ DWORD WINAPI WatchdogThread(LPVOID)
                     LogLine(note);
                 }
             }
-            const ULONGLONG idle = now - stream->lastDraw;
+            // A screen the client keeps reading (the live player asks for its container every
+            // frame) is in use even while it is not drawn, so that counts as life too.
+            const ULONGLONG lastUse = stream->lastRead > stream->lastDraw ? stream->lastRead : stream->lastDraw;
+            const ULONGLONG idle = now - lastUse;
             if (stream->sessionActive && idle > kIdleStopMs)
             {
                 StopSession(stream);
@@ -528,7 +531,7 @@ DWORD WINAPI WatchdogThread(LPVOID)
             }
             if (stream->primaryActive && idle > kIdleStopMs)
             {
-                LogLine("screen idle (no draw for 3 s): primary browser stopped\r\n");
+                LogLine("screen idle (no draw or page read for 3 s): primary browser stopped\r\n");
                 StopPrimaryBrowser(stream);
             }
             if (!stream->sessionActive && stream->ring && idle > kIdleFreeMs)

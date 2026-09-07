@@ -72,6 +72,6 @@ bool CallPrimary(ScreenStream* stream, const char* script, char* out, size_t out
 // Latest primary paint into the crop rectangle. Caller holds stream->lock.
 bool BlitPrimaryPage(ScreenStream* stream, HDC hdc, int destX, int destY);
 // Counts a client page read answered from Electron ([screens] stats), and the periodic line.
-void CountPrimaryRead(ScreenStream* stream, const wchar_t* id, double waitMs, bool ok);
+void CountPrimaryRead(ScreenStream* stream, const wchar_t* id, double waitMs, bool ok, bool loading = false);
 void LogPrimaryStats(ScreenStream* stream);
 } // namespace aisp

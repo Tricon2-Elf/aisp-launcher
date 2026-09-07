@@ -546,7 +546,7 @@ void ForwardScriptToPrimary(ScreenStream* stream, const wchar_t* script)
     LeaveCriticalSection(&stream->lock);
 }
 
-void CountPrimaryRead(ScreenStream* stream, const wchar_t* id, double waitMs, bool ok)
+void CountPrimaryRead(ScreenStream* stream, const wchar_t* id, double waitMs, bool ok, bool loading)
 {
     EnterCriticalSection(&stream->lock);
     if (std::wcscmp(id, L"statusForm") == 0)
@@ -555,6 +555,8 @@ void CountPrimaryRead(ScreenStream* stream, const wchar_t* id, double waitMs, bo
         ++stream->primaryReadsOther;
     if (!ok)
         ++stream->primaryReadsFailed;
+    if (loading)
+        ++stream->primaryReadsLoading;
     stream->primaryWaitMs += waitMs;
     if (waitMs > stream->primaryWaitMaxMs)
         stream->primaryWaitMaxMs = waitMs;
@@ -578,11 +580,11 @@ void LogPrimaryStats(ScreenStream* stream)
     }
     const DWORD reads = stream->primaryReadsStatus + stream->primaryReadsOther;
     char line[400] = {};
-    StringCchPrintfA(line, 400, "primary stats: %.1f s: %lu reads (%lu statusForm, %lu other, %lu failed), %lu evals, waited %.1f ms total, %.2f ms avg, %.1f ms max, %.2f%% of the interval\r\n",
+    StringCchPrintfA(line, 400, "primary stats: %.1f s: %lu reads (%lu statusForm, %lu other, %lu failed, %lu loading), %lu evals, waited %.1f ms total, %.2f ms avg, %.1f ms max, %.2f%% of the interval\r\n",
                      elapsed / 1000.0, static_cast<unsigned long>(reads), static_cast<unsigned long>(stream->primaryReadsStatus), static_cast<unsigned long>(stream->primaryReadsOther),
-                     static_cast<unsigned long>(stream->primaryReadsFailed), static_cast<unsigned long>(stream->primaryEvals), stream->primaryWaitMs, reads ? stream->primaryWaitMs / reads : 0.0,
+                     static_cast<unsigned long>(stream->primaryReadsFailed), static_cast<unsigned long>(stream->primaryReadsLoading), static_cast<unsigned long>(stream->primaryEvals), stream->primaryWaitMs, reads ? stream->primaryWaitMs / reads : 0.0,
                      stream->primaryWaitMaxMs, stream->primaryWaitMs / elapsed * 100.0);
-    stream->primaryReadsStatus = stream->primaryReadsOther = stream->primaryEvals = stream->primaryReadsFailed = 0;
+    stream->primaryReadsStatus = stream->primaryReadsOther = stream->primaryEvals = stream->primaryReadsFailed = stream->primaryReadsLoading = 0;
     stream->primaryWaitMs = stream->primaryWaitMaxMs = 0;
     stream->primaryStatsAt = now;
     LeaveCriticalSection(&stream->lock);
