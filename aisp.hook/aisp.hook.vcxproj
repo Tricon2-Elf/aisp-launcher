@@ -167,6 +167,7 @@
     <ClCompile Include="source_ffmpeg.cpp" />
     <ClCompile Include="source_pattern.cpp" />
     <ClCompile Include="tv_panel.cpp" />
+    <ClCompile Include="reload_notify.cpp" />
     <ClCompile Include="https.cpp" />
     <ClCompile Include="config.cpp" />
   </ItemGroup>
@@ -178,6 +179,7 @@
     <ClInclude Include="screen.h" />
     <ClInclude Include="source.h" />
     <ClInclude Include="tv_panel.h" />
+    <ClInclude Include="reload_notify.h" />
     <ClInclude Include="https.h" />
     <ClInclude Include="config.h" />
   </ItemGroup>

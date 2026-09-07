@@ -20,6 +20,7 @@
 #include "screen.h"
 #include "source.h"
 #include "tv_panel.h"
+#include "reload_notify.h"
 #include "browser.h"
 #include "document.h"
 #include "https.h"
@@ -2193,6 +2194,8 @@ DWORD WINAPI InitHooksThread(LPVOID deferred)
     AppendInitLog("init: ole32 patched");
     PatchTvCommentButton();
     AppendInitLog("init: tv button");
+    PatchNicoliveReloadNotify();
+    AppendInitLog("init: reload notify");
     PatchHttps();
     AppendInitLog("init: https");
     // Walking every module's kernel32 IAT from a worker still kills the process under
