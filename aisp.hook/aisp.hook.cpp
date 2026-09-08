@@ -1357,6 +1357,7 @@ void OnScreenNavigate(IWebBrowser2* browser, const wchar_t* url, const wchar_t* 
     stream->pageScroll[0] = stream->pageScroll[1] = 0;
     stream->pageScrollLock = false;
     stream->pageScale = stream->sessionScale = 1.0f;
+    stream->pageRun[0] = stream->sessionRun[0] = L'\0';
     stream->pageClear = false;
     if (stream->html)
     {
@@ -1504,6 +1505,17 @@ void ApplyTitle(ScreenStream* stream, const wchar_t* title)
         stream->pageScale = (scaleText && swscanf(scaleText + 7, L"%lf", &scale) == 1 && scale >= 0.1 && scale <= 8.0)
             ? static_cast<float>(scale)
             : 1.0f;
+        // run=<url>: up to the next key (a URL holds no ';' of its own here).
+        stream->pageRun[0] = L'\0';
+        if (const wchar_t* runText = std::wcsstr(title, L";run="))
+        {
+            const wchar_t* start = runText + 5;
+            size_t length = 0;
+            while (start[length] && start[length] != L';')
+                ++length;
+            if (length > 0 && length < 1024)
+                StringCchCopyNW(stream->pageRun, 1024, start, length);
+        }
     }
     if (const wchar_t* vol = std::wcsstr(title, L"vol="))
     {
@@ -1661,8 +1673,10 @@ HRESULT WINAPI HookOleDraw(LPUNKNOWN unknown, DWORD aspect, HDC hdc, LPCRECT bou
         && (stream->pageScale < stream->sessionScale - 0.001f || stream->pageScale > stream->sessionScale + 0.001f);
     // A moved timeline (resume, seek) restarts the session at the new position; a pause only holds.
     const bool timelineChanged = stream->sessionActive && (stream->pageStart != stream->sessionStart || stream->pageOffset != stream->sessionOffset);
+    // The run script is given to the host at the start; another one means another start.
+    const bool runChanged = browserSource && stream->sessionActive && std::wcscmp(stream->pageRun, stream->sessionRun) != 0;
     stream->paused = stream->pagePausedAt > 0 || stream->pageHold;
-    const bool changed = std::wcscmp(wanted, stream->source) != 0 || boxChanged || fpsChanged || cropChanged || timelineChanged || scaleChanged;
+    const bool changed = std::wcscmp(wanted, stream->source) != 0 || boxChanged || fpsChanged || cropChanged || timelineChanged || scaleChanged || runChanged;
     if (stream->sessionActive || stream->primaryActive)
         SendBrowserControl(stream);
     const bool havePage = UsePrimaryBrowser() && stream->pageReady && stream->pagePresent;

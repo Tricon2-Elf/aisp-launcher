@@ -101,6 +101,11 @@ struct ScreenStream
     bool pageScrollLock = false;         // any scroll extra in the title: hide scrollbars and pin offset
     float pageScale = 1.0f;              // scale= from the page title (browser zoom; 1 = 100%)
     float sessionScale = 1.0f;           // scale the running browser session was started with
+    // run= from the page title: a script URL (root-relative to the screen page, or absolute)
+    // the browser host fetches and runs in an electron: source's page once it has loaded (a
+    // site's own player button, a layout switch). A change restarts the session.
+    wchar_t pageRun[1024] = {};
+    wchar_t sessionRun[1024] = {};
     HANDLE controlWrite = nullptr;       // named pipe to a source process that takes live commands
     int sentScroll[2] = {0x7FFFFFFF, 0x7FFFFFFF};
     int sentScrollLock = -1;

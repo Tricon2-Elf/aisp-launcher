@@ -16,31 +16,50 @@ namespace aisp
 {
 // aisp.electron\electron.exe next to the game ([tools] electron or AISP_ELECTRON overrides), with the app folder
 // beside it.
-DWORD RunElectronSource(ScreenStream* stream)
+// A root-relative URL (a page or script of the emulator's own, such as the YouTube embed
+// page) is taken at the origin the screen page came from, so the server need not know its
+// public address; an absolute one is kept. False when it is neither.
+bool ResolveAgainstPage(ScreenStream* stream, const wchar_t* url, wchar_t* out, size_t outCount)
 {
-    wchar_t message[512] = {};
-    const wchar_t* url = stream->source + 9;
-    wchar_t resolved[4096] = {};
     if (url[0] == L'/' && url[1] != L'/')
     {
-        // Root-relative: a page of the emulator's own (the YouTube embed page), at the origin
-        // the screen page came from, so the server need not know its public address.
         const wchar_t* base = stream->pageUrl;
         const wchar_t* scheme = std::wcsstr(base, L"://");
         const wchar_t* pathStart = scheme ? std::wcschr(scheme + 3, L'/') : nullptr;
         if (!scheme || !pathStart)
-        {
-            SetStatus(stream, L"browser: no screen page origin for a relative URL");
-            return 0;
-        }
-        StringCchCopyNW(resolved, 4096, base, pathStart - base);
-        StringCchCatW(resolved, 4096, url);
-        url = resolved;
+            return false;
+        StringCchCopyNW(out, outCount, base, pathStart - base);
+        StringCchCatW(out, outCount, url);
+        return true;
     }
     if (_wcsnicmp(url, L"http://", 7) != 0 && _wcsnicmp(url, L"https://", 8) != 0)
+        return false;
+    StringCchCopyW(out, outCount, url);
+    return true;
+}
+
+DWORD RunElectronSource(ScreenStream* stream)
+{
+    wchar_t message[512] = {};
+    wchar_t resolved[4096] = {};
+    if (!ResolveAgainstPage(stream, stream->source + 9, resolved, 4096))
     {
-        SetStatus(stream, L"browser: expected http(s)://... or /path");
+        SetStatus(stream, L"browser: expected http(s)://... or /path (with a screen page origin)");
         return 0;
+    }
+    const wchar_t* url = resolved;
+    // run=<url> from the title: a script the host runs in the page once loaded.
+    wchar_t run[1024] = {};
+    EnterCriticalSection(&stream->lock);
+    StringCchCopyW(stream->sessionRun, 1024, stream->pageRun);
+    const bool haveRun = stream->pageRun[0] != L'\0';
+    wchar_t runWanted[1024] = {};
+    StringCchCopyW(runWanted, 1024, stream->pageRun);
+    LeaveCriticalSection(&stream->lock);
+    if (haveRun && !ResolveAgainstPage(stream, runWanted, run, 1024))
+    {
+        LogLine("browser: run= is not an http(s) URL or /path; ignored\r\n");
+        run[0] = L'\0';
     }
 
     const int boxW = stream->videoWidth, boxH = stream->videoHeight, fps = stream->fps;
@@ -72,6 +91,7 @@ DWORD RunElectronSource(ScreenStream* stream)
     request.mute = mute;
     request.gain = gain;
     request.framed = true;
+    request.run = run[0] ? run : nullptr;
     request.stop = &stream->stop;
     request.outControl = &controlPipe;
     request.outVideo = &videoPipe;

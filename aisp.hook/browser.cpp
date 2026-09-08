@@ -534,11 +534,19 @@ bool StartElectronSession(const ElectronSessionRequest& request, wchar_t* error,
     // tell them apart), the url last since it may hold anything.
     char urlUtf8[4096] = {};
     WideCharToMultiByte(CP_UTF8, 0, request.url, -1, urlUtf8, 4096, nullptr, nullptr);
-    char open[4900] = {};
+    // run=<url> rides along as one word (a URL has no spaces); the page url stays last.
+    char runWord[1100] = {};
+    if (request.run && request.run[0] && !std::wcschr(request.run, L' '))
+    {
+        char runUtf8[1040] = {};
+        WideCharToMultiByte(CP_UTF8, 0, request.run, -1, runUtf8, 1040, nullptr, nullptr);
+        StringCchPrintfA(runWord, 1100, " run=%s", runUtf8);
+    }
+    char open[6100] = {};
     StringCchPrintfA(
         open,
-        4900,
-        "open id=%ld width=%d height=%d fps=%d control=%ls video=%ls framed=%d scrollx=%d scrolly=%d hide=%d scale=%.4f mute=%d gain=%.4f url=%s\n",
+        6100,
+        "open id=%ld width=%d height=%d fps=%d control=%ls video=%ls framed=%d scrollx=%d scrolly=%d hide=%d scale=%.4f mute=%d gain=%.4f%s url=%s\n",
         InterlockedIncrement(&g_hub.nextScreenId),
         request.width,
         request.height,
@@ -552,6 +560,7 @@ bool StartElectronSession(const ElectronSessionRequest& request, wchar_t* error,
         request.scale > 0 ? request.scale : 1.0f,
         request.mute,
         request.gain,
+        runWord,
         urlUtf8
     );
     EnsureHubLock();

@@ -35,6 +35,7 @@ struct ElectronSessionRequest
     float scale = 1.0f, gain = 1.0f;
     int mute = 0;
     bool framed = false;
+    const wchar_t* run = nullptr; // script URL the host fetches and runs in the page once loaded
     volatile LONG* stop = nullptr;
     HANDLE* outControl = nullptr;
     HANDLE* outVideo = nullptr;

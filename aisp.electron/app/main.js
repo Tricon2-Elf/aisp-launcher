@@ -22,7 +22,7 @@
 // register SMTC / the Windows now-playing overlay. Offscreen paint follows
 // origin/feature/tv-support's aisp.electron app; that branch's hardcoded Twitch TV overlay
 // is not used — crop/scroll/scale are the layout knobs.
-const { app, BrowserWindow, session } = require("electron");
+const { app, BrowserWindow, net: electronNet, session } = require("electron");
 const net = require("net");
 const fs = require("fs");
 const path = require("path");
@@ -281,6 +281,10 @@ class Screen {
     this.url = args.url || "";
     this.controlName = args.control || "";
     this.videoName = args.video || "";
+    // run=<url>: a script fetched once and run in the page after every main-frame load (a site's
+    // own player button, a layout switch); nothing the page could do on its own from outside.
+    this.runUrl = args.run || "";
+    this.runScript = undefined;
     // framed=1: the video channel carries 8-byte-headed messages (type, length): 1 = a BGRA
     // frame, 2 = a UTF-8 text line (hello …, title …, failed …, ret <id> <json>, err <id> <text>).
     // Without it the channel is bare frames.
@@ -598,6 +602,7 @@ class Screen {
       this.applyView();
       this.sendTitle(browserWindow.getTitle());
       this.log(`loaded ${contents.getURL()}`);
+      this.runAfterLoad();
     });
     contents.on("page-title-updated", (_event, title) => this.sendTitle(title));
     contents.on("did-navigate", () => this.scheduleApply());
@@ -628,6 +633,39 @@ class Screen {
     browserWindow.setContentSize(this.width, this.height);
     browserWindow.loadURL(this.url).catch((error) => this.log(`navigate: ${error.message}`));
     this.log(`offscreen ${this.width}x${this.height} @ ${this.fps} fps scale ${this.state.scale} ${this.url}`);
+  }
+
+  // The run= script, fetched on first use (the page's own CSP does not apply to a script the
+  // host injects), then run in the main frame.
+  runAfterLoad() {
+    if (!this.runUrl || !this.window || this.window.isDestroyed())
+      return;
+    const execute = (script) => {
+      if (!this.window || this.window.isDestroyed())
+        return;
+      this.window.webContents.executeJavaScript(script).catch((error) => this.log(`run: ${error.message}`));
+    };
+    if (this.runScript !== undefined) {
+      execute(this.runScript);
+      return;
+    }
+    const request = electronNet.request(this.runUrl);
+    let body = "";
+    request.on("response", (response) => {
+      response.setEncoding("utf8");
+      response.on("data", (chunk) => { body += chunk; });
+      response.on("end", () => {
+        if (response.statusCode !== 200) {
+          this.log(`run: ${this.runUrl} answered ${response.statusCode}`);
+          return;
+        }
+        this.runScript = body;
+        this.log(`run: ${this.runUrl} (${body.length} bytes)`);
+        execute(body);
+      });
+    });
+    request.on("error", (error) => this.log(`run: ${this.runUrl}: ${error.message}`));
+    request.end();
   }
 
   // Ends the screen: its window and both channels. The hook sees the channels close (its reader
