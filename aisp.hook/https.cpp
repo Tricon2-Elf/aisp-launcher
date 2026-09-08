@@ -549,6 +549,7 @@ struct UploadStream
     std::string request;       // what the client's http::HTTP wrote
     std::string reply;         // the HTTP/1.1 text to hand back
     volatile LONG state = 0;   // 0 collecting the request, 1 request in flight, 2 reply ready, 3 done or closed
+    HANDLE worker = nullptr;   // the request's thread: it holds this pointer until it has exited
     DWORD connectThread = 0;   // the thread that asked for the connection
     ULONGLONG readyAt = 0;
     bool logged = false;       // the delivery line, once
@@ -632,8 +633,14 @@ DWORD WINAPI UploadWorker(LPVOID parameter)
     }
     stream->reply = ResponseText(response);
     stream->readyAt = GetTickCount64();
-    InterlockedExchange(&stream->state, 2);
-    LogN(L"aisp.hook: https: upload.php: reply ready, %u bytes, waiting for the game to poll", static_cast<unsigned>(stream->reply.size()));
+    // Ready only if still wanted: a stream the client closed meanwhile (a cancelled or retried
+    // upload) stays closed, its reply dropped. Nothing touches the stream after this: the
+    // connect hook frees a closed stream once this thread has exited.
+    const unsigned replyBytes = static_cast<unsigned>(stream->reply.size());
+    if (InterlockedCompareExchange(&stream->state, 2, 1) == 1)
+        LogN(L"aisp.hook: https: upload.php: reply ready, %u bytes, waiting for the game to poll", replyBytes);
+    else
+        Log(L"aisp.hook: https: upload.php: reply arrived after the client closed the connection; dropped");
     return 0;
 }
 
@@ -670,7 +677,7 @@ bool __thiscall Stream_Write(UploadStream* self, const void* data, int length)
         Log(line);
         HANDLE thread = CreateThread(nullptr, 0, UploadWorker, self, 0, nullptr);
         if (thread)
-            CloseHandle(thread);
+            self->worker = thread; // kept: the stream may not be freed while the worker runs
         else
         {
             Log(L"aisp.hook: https: upload.php: worker thread could not start");
@@ -763,12 +770,20 @@ int __thiscall HookVceConnect(void* self, void* sessionPointer, const char* host
         stream->host.resize(colon);
     stream->connectThread = GetCurrentThreadId();
     EnterCriticalSection(&g_uploadLock);
-    // This session's previous stream, if it was ours and is done with, is not needed any more.
+    // This session's previous streams, once done with (closed by the client, or delivered) and
+    // no longer in a worker's hands: a request in flight may still be waiting on the server
+    // (up to the request timeout) after the client cancelled it, and its thread writes the
+    // stream when it returns, so such a stream stays until a later connect finds the thread
+    // gone. The session is about to point at the new stream, so none of its old ones are
+    // referenced from it after this.
     for (UploadStream** link = &g_uploads; *link;)
     {
         UploadStream* old = *link;
-        if (old->session == session && old->state == 3 && *reinterpret_cast<void**>(session + 0x4) == old)
+        const bool workerDone = !old->worker || WaitForSingleObject(old->worker, 0) == WAIT_OBJECT_0;
+        if (old->session == session && old->state == 3 && workerDone)
         {
+            if (old->worker)
+                CloseHandle(old->worker);
             *link = old->next;
             delete old;
         }
