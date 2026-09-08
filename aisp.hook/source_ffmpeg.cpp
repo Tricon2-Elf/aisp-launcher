@@ -11,9 +11,12 @@
 //
 // Tools: a streamlink install in the game directory (streamlink\bin\streamlink.exe and its
 // bundled streamlink\ffmpeg\ffmpeg.exe) and yt-dlp\yt-dlp.exe there; [tools] in aisp.hook.ini (or
-// AISP_STREAMLINK, AISP_YTDLP and AISP_FFMPEG) overrides the paths.
+// AISP_STREAMLINK, AISP_YTDLP and AISP_FFMPEG) overrides the paths. What yt-dlp resolves for a
+// video (its media URLs and duration) is cached under aisp.cache\yt-dlp (ytdlp.cpp), so a
+// video's loops and later starts do not wait on it.
 #include "source.h"
 #include "config.h"
+#include "ytdlp.h"
 
 #include <strsafe.h>
 #include <cstring>
@@ -68,7 +71,9 @@ LONGLONG ReadAvi(ScreenStream* stream, HANDLE pipe)
                     EnterCriticalSection(&stream->lock);
                     stream->audioActive = true;
                     LeaveCriticalSection(&stream->lock);
-                    stream->audioRenderThread = CreateThread(nullptr, 0, AudioRenderThread, stream, 0, nullptr);
+                    // One renderer per session: a looped video's next run feeds the same one.
+                    if (!stream->audioRenderThread)
+                        stream->audioRenderThread = CreateThread(nullptr, 0, AudioRenderThread, stream, 0, nullptr);
                 }
             }
             continue; // enter the container
@@ -127,7 +132,8 @@ constexpr wchar_t kHttpReconnect[] = L"-reconnect 1 -reconnect_on_network_error 
 
 DWORD RunFfmpegSource(ScreenStream* stream)
 {
-    // A video loops: when it ends on its own, it starts again where the timeline says.
+    // A video always loops: when it ends on its own, it starts again where the timeline says,
+    // at once (the media URLs come from the cache, refreshed ahead of their expiry).
     for (;;)
     {
         LONGLONG frames = 0;
@@ -136,9 +142,11 @@ DWORD RunFfmpegSource(ScreenStream* stream)
         if (!ended || stream->stop || frames == 0 || _wcsnicmp(stream->source, L"yt-dlp:", 7) != 0)
             return 0;
         SetStatus(stream, L"video ended; looping");
-        Sleep(200);
     }
 }
+
+// A start this close to the end would show a moment of the tail and loop: begin at 0 instead.
+constexpr double kNearEndSeconds = 3.0;
 
 // One run; true when the media ended by itself (as opposed to a failure or a stop).
 bool RunFfmpegOnce(ScreenStream* stream, LONGLONG* frames)
@@ -228,33 +236,22 @@ bool RunFfmpegOnce(ScreenStream* stream, LONGLONG* frames)
         // which support range requests, so ffmpeg seeks to the shared timeline's position
         // before reading a byte of the rest.
         const wchar_t* pageUrl = stream->source + 7;
-        if (!ToolPath(L"AISP_YTDLP", L"ytdlp", L"yt-dlp\\yt-dlp.exe", ytdlp, MAX_PATH))
-        {
-            StringCchPrintfW(message, 512, L"yt-dlp not found: %s", ytdlp);
-            SetStatus(stream, message);
+        // The media URLs (one, or video and audio apart) and the duration: from the cache when
+        // it has them, else yt-dlp (which takes seconds; the status line says so meanwhile).
+        YtdlpInfo info;
+        if (!ResolveYtdlp(stream, pageUrl, info))
             return false;
-        }
-        StringCchPrintfW(message, 512, L"yt-dlp: resolving %s", pageUrl);
-        SetStatus(stream, message);
-        // The media URLs (one, or video and audio apart) and then the duration, one per line.
-        StringCchPrintfW(command, 4096, L"\"%s\" --no-warnings -f \"bv*[height<=480]+ba/b[height<=480]/b\" --print urls --print duration \"%s\"", ytdlp, pageUrl);
-        wchar_t lines[3][2048] = {};
-        const int count = RunToolForLines(command, lines[0], 2048, 3);
-        int urlCount = 0;
-        double duration = 0;
-        for (int i = 0; i < count; ++i)
-        {
-            if (_wcsnicmp(lines[i], L"http", 4) == 0 && urlCount < 2)
-                urlCount++;
-            else if (i == count - 1)
-                duration = wcstod(lines[i], nullptr);
-        }
-        if (urlCount == 0)
-        {
-            SetStatus(stream, L"yt-dlp returned no media URL (see aisp.screen.log)");
-            return false;
-        }
+        const double duration = info.duration;
         stream->seekSeconds = TimelinePosition(stream, duration);
+        if (duration > 0 && stream->seekSeconds > duration - kNearEndSeconds)
+            stream->seekSeconds = 0;
+        EnterCriticalSection(&stream->lock);
+        StringCchCopyW(stream->mediaTitle, 512, info.title);
+        stream->mediaDuration = duration;
+        LeaveCriticalSection(&stream->lock);
+        // URLs that lapse before this run reaches the loop point are refreshed in the background.
+        if (duration > 0)
+            RefreshYtdlpIfExpiring(pageUrl, duration - stream->seekSeconds + 60.0);
         // Media servers drop connections that read at playback pace for long (YouTube does
         // after a minute or so); ffmpeg then re-requests from the current byte on a new
         // connection instead of failing. The seek goes before the input, so it is an HTTP
@@ -263,16 +260,16 @@ bool RunFfmpegOnce(ScreenStream* stream, LONGLONG* frames)
         StringCchPrintfW(seek, 160, L"%s%s", kHttpReconnect, L"");
         if (stream->seekSeconds > 0)
             StringCchPrintfW(seek, 160, L"%s-ss %.3f ", kHttpReconnect, stream->seekSeconds);
-        char note[160] = {};
-        StringCchPrintfA(note, 160, "yt-dlp: %d url(s), duration %.1f s, seeking to %.1f s\r\n", urlCount, duration, stream->seekSeconds);
+        char note[200] = {};
+        StringCchPrintfA(note, 200, "yt-dlp: %d url(s)%s, duration %.1f s, seeking to %.1f s\r\n", info.urlCount, info.fromCache ? " (cached)" : "", duration, stream->seekSeconds);
         LogLine(note);
-        if (urlCount == 2)
+        if (info.urlCount == 2)
         {
-            StringCchPrintfW(inputArgs, 4600, L"%s-i \"%s\" %s-i \"%s\"", seek, lines[0], seek, lines[1]);
+            StringCchPrintfW(inputArgs, 4600, L"%s-i \"%s\" %s-i \"%s\"", seek, info.urls[0], seek, info.urls[1]);
             audioInput = 1;
         }
         else
-            StringCchPrintfW(inputArgs, 4600, L"%s-i \"%s\"", seek, lines[0]);
+            StringCchPrintfW(inputArgs, 4600, L"%s-i \"%s\"", seek, info.urls[0]);
     }
     else
     {
@@ -285,6 +282,11 @@ bool RunFfmpegOnce(ScreenStream* stream, LONGLONG* frames)
     if (stream->stop)
         return false;
 
+    // This run's frames start at the ring's current end and at the seek: the page's position.
+    EnterCriticalSection(&stream->lock);
+    stream->runSeek = stream->seekSeconds;
+    stream->runStartFrame = stream->videoWritten;
+    LeaveCriticalSection(&stream->lock);
     SetStatus(stream, L"ffmpeg: starting");
     // ffmpeg describes its input and outputs in aisp.screen.log (a dozen lines per session,
     // progress stats off); [tools] ffmpeg_loglevel or AISP_FFMPEG_LOGLEVEL overrides, e.g. debug.

@@ -15,10 +15,14 @@
 #include <cmath>
 #include <cstring>
 #include <cwchar>
+#include <string>
 
 #include "screen.h"
 #include "source.h"
 #include "tv_panel.h"
+#include "reload_notify.h"
+#include "browser.h"
+#include "document.h"
 #include "https.h"
 #include "config.h"
 
@@ -191,6 +195,19 @@ HMODULE WINAPI HookLoadLibraryW(LPCWSTR lpLibFileName)
 // calls its ext_setVolume / ext_setMute script functions. Child processes are attached to a
 // job so they die with the game; stderr of every tool goes to aisp.screen.log next to the game
 // executable.
+//
+// By default ([screens] primary_browser=electron; ie keeps the client's own control, which
+// renders on the game thread and stays black under Wine) a sibling Electron process is the
+// page: it loads the rewritten screen URL, reports document.title, and its BGRA is what
+// OleDraw presents as the crop. IE is never navigated and its engine never runs:
+// IWebBrowser2::get_Document hands the client a document of the hook's own (document.cpp)
+// whose execScript runs the client's script in Electron and whose getElementById /
+// get_innerHTML fetch the element from Electron's page, so neither mshtml nor Wine's Gecko is
+// involved. The secondary compositor (electron: or ffmpeg) is unchanged — sites
+// refuse iframes, and streams need a real decoder. On Windows both primary and electron: are
+// aisp.electron\electron.exe over named pipes. On Wine they are a stock native Electron started
+// by aisp.electron/host.js over loopback TCP (Wine named pipes are not a Unix socket a Linux
+// Node can connect to).
 // ---------------------------------------------------------------------------------------------
 
 using CoCreateInstance_t = HRESULT(WINAPI*)(REFCLSID, LPUNKNOWN, DWORD, REFIID, LPVOID*);
@@ -198,12 +215,16 @@ using OleDraw_t = HRESULT(WINAPI*)(LPUNKNOWN, DWORD, HDC, LPCRECT);
 using Navigate_t = HRESULT(STDMETHODCALLTYPE*)(IWebBrowser2*, BSTR, VARIANT*, VARIANT*, VARIANT*, VARIANT*);
 using Navigate2_t = HRESULT(STDMETHODCALLTYPE*)(IWebBrowser2*, VARIANT*, VARIANT*, VARIANT*, VARIANT*, VARIANT*);
 using OleClose_t = HRESULT(STDMETHODCALLTYPE*)(IOleObject*, DWORD);
+using GetDocument_t = HRESULT(STDMETHODCALLTYPE*)(IWebBrowser2*, IDispatch**);
+using GetReadyState_t = HRESULT(STDMETHODCALLTYPE*)(IWebBrowser2*, READYSTATE*);
 
 CoCreateInstance_t g_originalCoCreateInstance = nullptr;
 OleDraw_t g_originalOleDraw = nullptr;
 Navigate_t g_originalNavigate = nullptr;
 Navigate2_t g_originalNavigate2 = nullptr;
 OleClose_t g_originalOleClose = nullptr;
+GetDocument_t g_originalGetDocument = nullptr;
+GetReadyState_t g_originalGetReadyState = nullptr;
 bool g_webBrowserPatched = false;
 wchar_t g_screenBase[1024] = {};
 
@@ -500,11 +521,19 @@ DWORD WINAPI WatchdogThread(LPVOID)
                     LogLine(note);
                 }
             }
-            const ULONGLONG idle = now - stream->lastDraw;
+            // A screen the client keeps reading (the live player asks for its container every
+            // frame) is in use even while it is not drawn, so that counts as life too.
+            const ULONGLONG lastUse = stream->lastRead > stream->lastDraw ? stream->lastRead : stream->lastDraw;
+            const ULONGLONG idle = now - lastUse;
             if (stream->sessionActive && idle > kIdleStopMs)
             {
                 StopSession(stream);
                 DebugLog(L"aisp.hook: screen idle, stream stopped: %s\n", stream->source);
+            }
+            if (stream->primaryActive && idle > kIdleStopMs)
+            {
+                LogLine("screen idle (no draw or page read for 3 s): primary browser stopped\r\n");
+                StopPrimaryBrowser(stream);
             }
             if (!stream->sessionActive && stream->ring && idle > kIdleFreeMs)
                 FreeRings(stream);
@@ -1036,6 +1065,7 @@ void StopSession(ScreenStream* stream)
     // source blocked reading ffmpeg's output sees the pipe close.
     HANDLE processes[2] = {};
     HANDLE controlWrite = nullptr;
+    bool electronTcp = false;
     EnterCriticalSection(&stream->lock);
     for (int i = 0; i < 2; ++i)
     {
@@ -1044,9 +1074,10 @@ void StopSession(ScreenStream* stream)
     }
     controlWrite = stream->controlWrite;
     stream->controlWrite = nullptr;
+    electronTcp = stream->electronTcp;
+    stream->electronTcp = false;
     LeaveCriticalSection(&stream->lock);
-    if (controlWrite)
-        CloseHandle(controlWrite);
+    CloseBrowserChannel(controlWrite, electronTcp);
     for (HANDLE process : processes)
     {
         if (process)
@@ -1057,7 +1088,8 @@ void StopSession(ScreenStream* stream)
     }
     // The source thread first (its pipe closes with the process); the renderer's handle is
     // taken only once it is gone, since the source starts it. A wait that times out gets a
-    // log line: the workers all watch `stop`.
+    // log line: the workers all watch `stop`. A source blocked in a ReadFile whose pipe some
+    // other process still holds open would not see the flag; its read is cancelled outright.
     const ULONGLONG waitStart = GetTickCount64();
     HANDLE threads[2] = {};
     const char* names[2] = {"source", "audio renderer"};
@@ -1065,6 +1097,8 @@ void StopSession(ScreenStream* stream)
     threads[0] = stream->thread;
     stream->thread = nullptr;
     LeaveCriticalSection(&stream->lock);
+    if (threads[0])
+        CancelSynchronousIo(threads[0]);
     for (int i = 0; i < 2; ++i)
     {
         if (i == 1)
@@ -1116,6 +1150,11 @@ void FreeRings(ScreenStream* stream)
         stream->keyBits = nullptr;
         stream->keyWidth = stream->keyHeight = 0;
     }
+    if (stream->clearBrush)
+    {
+        DeleteObject(stream->clearBrush);
+        stream->clearBrush = nullptr;
+    }
     delete[] stream->ring;
     delete[] stream->liveFrame;
     delete[] stream->livePresent;
@@ -1141,6 +1180,10 @@ void StartSession(ScreenStream* stream)
     stream->titlePoll = 0;
     stream->underruns = stream->videoWaits = stream->videoDrops = stream->audioWaits = stream->audioDrops = 0;
     stream->liveVideo = IsBrowserSource(stream->source);
+    stream->mediaTitle[0] = L'\0';
+    stream->mediaDuration = 0;
+    stream->runSeek = 0;
+    stream->runStartFrame = 0;
     stream->sentScroll[0] = stream->sentScroll[1] = 0x7FFFFFFF;
     stream->sentScrollLock = -1;
     stream->sentScale = -1.0f;
@@ -1158,6 +1201,7 @@ void StartSession(ScreenStream* stream)
         if (!stream->livePresent)
             stream->livePresent = new BYTE[stream->frameBytes]();
         stream->liveReady = false;
+        stream->livePresented = false;
     }
     else if (!stream->ring)
     {
@@ -1231,8 +1275,12 @@ IUnknown* IdentityOf(IUnknown* object)
 
 // Called from the Navigate hook with the URL the client built, before the rewrite. Every screen
 // gets an entry; what it plays, if anything, is decided by the page the server serves, which
-// publishes the source in its title (read by the OleDraw hook).
-void OnScreenNavigate(IWebBrowser2* browser, const wchar_t* url)
+// publishes the source in its title (read by the OleDraw hook). `rewritten` is the emulator URL
+// IE is sent to, and the primary Electron host if that path is on.
+// The client makes a new control for every page (ATL navigates it once), so a screen entry
+// sees one navigation; a page's own reload never comes through here (the primary host holds
+// its title until the new page has run, and the hook's state stays as the last title said).
+void OnScreenNavigate(IWebBrowser2* browser, const wchar_t* url, const wchar_t* rewritten)
 {
     if (!url || !browser)
         return;
@@ -1262,6 +1310,11 @@ void OnScreenNavigate(IWebBrowser2* browser, const wchar_t* url)
     LeaveCriticalSection(&g_streamsLock);
     if (found)
         identity->lpVtbl->Release(identity); // the entry already holds one
+    {
+        char note[1200] = {};
+        StringCchPrintfA(note, 1200, "screen navigate (%s entry): %ls\r\n", found ? "existing" : "new", url);
+        LogLine(note);
+    }
     StopSession(stream);
 
     // Crop rectangles the client copies out of the control (see the frame routine): live pages
@@ -1304,6 +1357,8 @@ void OnScreenNavigate(IWebBrowser2* browser, const wchar_t* url)
     stream->pageScroll[0] = stream->pageScroll[1] = 0;
     stream->pageScrollLock = false;
     stream->pageScale = stream->sessionScale = 1.0f;
+    stream->pageRun[0] = stream->sessionRun[0] = L'\0';
+    stream->pageClear = false;
     if (stream->html)
     {
         stream->html->lpVtbl->Release(stream->html);
@@ -1311,7 +1366,18 @@ void OnScreenNavigate(IWebBrowser2* browser, const wchar_t* url)
     }
     stream->document = nullptr; // the navigation brings a new document
     stream->lastDraw = GetTickCount64();
+    if (rewritten && rewritten[0])
+        StringCchCopyW(stream->pageUrl, 4096, rewritten);
+    else
+        stream->pageUrl[0] = L'\0';
     LeaveCriticalSection(&stream->lock);
+    StopPrimaryBrowser(stream);
+    if (UsePrimaryBrowser() && stream->pageUrl[0])
+    {
+        // IE never navigates; the client picks the page up through get_Document (see the
+        // note above the vtable hooks) and reads it from Electron.
+        StartPrimaryBrowser(stream, stream->pageUrl);
+    }
 }
 
 // The document OleDraw hands us belongs to some WebBrowser; ask it which through its service
@@ -1320,6 +1386,9 @@ ScreenStream* FindStream(IUnknown* document)
 {
     if (!document)
         return nullptr;
+    // In primary mode the document is the hook's own and knows its screen.
+    if (ScreenStream* synthesized = StreamOfSynthesizedDocument(document))
+        return synthesized;
 
     EnterCriticalSection(&g_streamsLock);
     ScreenStream* found = nullptr;
@@ -1368,14 +1437,11 @@ ScreenStream* FindStream(IUnknown* document)
 
 // The page publishes "aisp:vol=<0-100>;mute=<0|1>[;src=<source>]" in its title: the volume and
 // mute whenever the client's ext_setVolume / ext_setMute reach it, the source as the server
-// decided when it served the page. Call under the stream lock.
-void PollTitle(ScreenStream* stream)
+// decided when it served the page. The other keys (box, crop, key, clear, fps, scroll, scale,
+// rolloff, pan, the timeline) are the page's layout of that source. Call under the stream lock.
+void ApplyTitle(ScreenStream* stream, const wchar_t* title)
 {
-    if (!stream->html || ++stream->titlePoll < kTitlePollFrames)
-        return;
-    stream->titlePoll = 0;
-    BSTR title = nullptr;
-    if (FAILED(stream->html->lpVtbl->get_title(stream->html, &title)) || !title)
+    if (!title)
         return;
     if (std::wcsncmp(title, L"aisp:", 5) == 0)
     {
@@ -1391,6 +1457,28 @@ void PollTitle(ScreenStream* stream)
         unsigned int key = 0;
         stream->keyed = keyText && swscanf(keyText + 5, L"%6x", &key) == 1;
         stream->keyColor = key & 0xFFFFFF;
+        // clear=1 takes the key colour (the off-black of the room TVs without one); clear=rrggbb
+        // names its own. Anything else, or none, shows the page.
+        const wchar_t* clearText = std::wcsstr(title, L";clear=");
+        stream->pageClear = false;
+        if (clearText)
+        {
+            const wchar_t* word = clearText + 7;
+            size_t length = 0;
+            while (word[length] && word[length] != L';')
+                ++length;
+            unsigned int colour = 0;
+            if (length == 1 && word[0] == L'1')
+            {
+                stream->pageClear = true;
+                stream->clearColor = stream->keyed ? stream->keyColor : 0x100010;
+            }
+            else if (length == 6 && swscanf(word, L"%6x", &colour) == 1)
+            {
+                stream->pageClear = true;
+                stream->clearColor = colour & 0xFFFFFF;
+            }
+        }
         int box[4] = {};
         const wchar_t* boxText = std::wcsstr(title, L";box=");
         if (boxText && swscanf(boxText + 5, L"%d,%d,%d,%d", &box[0], &box[1], &box[2], &box[3]) == 4 && box[2] > 0 && box[3] > 0
@@ -1417,6 +1505,17 @@ void PollTitle(ScreenStream* stream)
         stream->pageScale = (scaleText && swscanf(scaleText + 7, L"%lf", &scale) == 1 && scale >= 0.1 && scale <= 8.0)
             ? static_cast<float>(scale)
             : 1.0f;
+        // run=<url>: up to the next key (a URL holds no ';' of its own here).
+        stream->pageRun[0] = L'\0';
+        if (const wchar_t* runText = std::wcsstr(title, L";run="))
+        {
+            const wchar_t* start = runText + 5;
+            size_t length = 0;
+            while (start[length] && start[length] != L';')
+                ++length;
+            if (length > 0 && length < 1024)
+                StringCchCopyNW(stream->pageRun, 1024, start, length);
+        }
     }
     if (const wchar_t* vol = std::wcsstr(title, L"vol="))
     {
@@ -1458,6 +1557,31 @@ void PollTitle(ScreenStream* stream)
     stream->pageOffset = offset ? wcstod(offset + 8, nullptr) : 0;
     stream->pagePausedAt = paused ? wcstod(paused + 8, nullptr) : 0;
     stream->pageHold = hold && hold[6] == L'1';
+}
+
+void PollTitle(ScreenStream* stream)
+{
+    if (UsePrimaryBrowser())
+    {
+        // IE has no page; everything is in Electron's title, which the video thread has already
+        // put here, so a change is applied on the very next draw.
+        if (stream->electronTitleNew && stream->electronTitle[0])
+        {
+            stream->electronTitleNew = false;
+            ApplyTitle(stream, stream->electronTitle);
+        }
+        return;
+    }
+    // IE: the title is a COM read on the game's thread, kept to about twice a second.
+    if (++stream->titlePoll < kTitlePollFrames)
+        return;
+    stream->titlePoll = 0;
+    if (!stream->html)
+        return;
+    BSTR title = nullptr;
+    if (FAILED(stream->html->lpVtbl->get_title(stream->html, &title)) || !title)
+        return;
+    ApplyTitle(stream, title);
     SysFreeString(title);
 }
 
@@ -1499,18 +1623,39 @@ bool EnsureKeySurface(ScreenStream* stream, HDC reference)
     return true;
 }
 
+// The brush of the page's clear colour, kept while the colour stays. Caller holds stream->lock.
+HBRUSH ClearBrush(ScreenStream* stream)
+{
+    if (stream->clearBrush && stream->clearBrushColor == stream->clearColor)
+        return stream->clearBrush;
+    if (stream->clearBrush)
+        DeleteObject(stream->clearBrush);
+    const DWORD c = stream->clearColor;
+    stream->clearBrush = CreateSolidBrush(RGB((c >> 16) & 0xFF, (c >> 8) & 0xFF, c & 0xFF));
+    stream->clearBrushColor = c;
+    return stream->clearBrush ? stream->clearBrush : static_cast<HBRUSH>(GetStockObject(BLACK_BRUSH));
+}
+
 HRESULT WINAPI HookOleDraw(LPUNKNOWN unknown, DWORD aspect, HDC hdc, LPCRECT bounds)
 {
     ScreenStream* stream = g_screenVideoInitialised ? FindStream(unknown) : nullptr;
     if (!stream || !bounds || !hdc)
         return g_originalOleDraw(unknown, aspect, hdc, bounds);
     stream->lastDraw = GetTickCount64();
+    if (UsePrimaryBrowser() && stream->pageUrl[0] && !stream->primaryActive && GetTickCount64() >= stream->primaryRetryAt)
+        StartPrimaryBrowser(stream, stream->pageUrl);
 
     // What the page says to play and where, applied when either changes: start, replace, or stop.
     wchar_t wanted[512] = {};
     int wantedBox[4] = {};
     EnterCriticalSection(&stream->lock);
     PollTitle(stream);
+    if (g_logStats && stream->primaryActive)
+    {
+        LeaveCriticalSection(&stream->lock);
+        LogPrimaryStats(stream);
+        EnterCriticalSection(&stream->lock);
+    }
     StringCchCopyW(wanted, 512, stream->pageSource);
     std::memcpy(wantedBox, stream->pageBox, sizeof(wantedBox));
     const bool boxChanged = wantedBox[2] > 0
@@ -1528,11 +1673,16 @@ HRESULT WINAPI HookOleDraw(LPUNKNOWN unknown, DWORD aspect, HDC hdc, LPCRECT bou
         && (stream->pageScale < stream->sessionScale - 0.001f || stream->pageScale > stream->sessionScale + 0.001f);
     // A moved timeline (resume, seek) restarts the session at the new position; a pause only holds.
     const bool timelineChanged = stream->sessionActive && (stream->pageStart != stream->sessionStart || stream->pageOffset != stream->sessionOffset);
+    // The run script is given to the host at the start; another one means another start.
+    const bool runChanged = browserSource && stream->sessionActive && std::wcscmp(stream->pageRun, stream->sessionRun) != 0;
     stream->paused = stream->pagePausedAt > 0 || stream->pageHold;
-    const bool changed = std::wcscmp(wanted, stream->source) != 0 || boxChanged || fpsChanged || cropChanged || timelineChanged || scaleChanged;
-    if (stream->sessionActive && stream->controlWrite)
+    const bool changed = std::wcscmp(wanted, stream->source) != 0 || boxChanged || fpsChanged || cropChanged || timelineChanged || scaleChanged || runChanged;
+    if (stream->sessionActive || stream->primaryActive)
         SendBrowserControl(stream);
+    const bool havePage = UsePrimaryBrowser() && stream->pageReady && stream->pagePresent;
+    const bool clear = stream->pageClear;
     LeaveCriticalSection(&stream->lock);
+    PushPageState(stream);
     if (changed)
     {
         StopSession(stream);
@@ -1560,20 +1710,34 @@ HRESULT WINAPI HookOleDraw(LPUNKNOWN unknown, DWORD aspect, HDC hdc, LPCRECT bou
         // Also the restart after an idle stop (game minimised, or the TV came back).
         if (stream->source[0])
             StartSession(stream);
-        else
+        else if (!havePage && !clear)
             return g_originalOleDraw(unknown, aspect, hdc, bounds); // the page is the content
     }
 
-    // When the video box is only part of the crop (the Stage wall's main LED), let the page draw
-    // itself first so the rest of the crop, the banner, still shows the page; a TV's video box is
-    // the whole crop, so the page draw is skipped there.
-    const bool videoFillsCrop = stream->videoX == 0 && stream->videoY == 0 && stream->videoWidth == stream->width && stream->videoHeight == stream->height;
-    if (videoFillsCrop && !stream->keyed)
-        FillRect(hdc, bounds, static_cast<HBRUSH>(GetStockObject(BLACK_BRUSH)));
-    else
-        g_originalOleDraw(unknown, aspect, hdc, bounds);
+    // clear: the page is not drawn at all, the crop is the clear colour under the video.
+    // Otherwise the primary Electron paint replaces OleDraw of ieframe; failing that, when the
+    // video box is only part of the crop (the Stage wall's main LED), let the page draw itself
+    // first so the rest of the crop, the banner, still shows the page; a TV's video box is the
+    // whole crop, so the page draw is skipped there.
     const int x = bounds->left + stream->x;
     const int y = bounds->top + stream->y;
+    const bool videoFillsCrop = stream->videoX == 0 && stream->videoY == 0 && stream->videoWidth == stream->width && stream->videoHeight == stream->height;
+    const bool keyed = stream->keyed && !clear;
+    EnterCriticalSection(&stream->lock);
+    HBRUSH clearBrush = clear ? ClearBrush(stream) : nullptr;
+    const bool blitPage = !clear && havePage && BlitPrimaryPage(stream, hdc, x, y);
+    LeaveCriticalSection(&stream->lock);
+    if (clear)
+        FillRect(hdc, bounds, clearBrush);
+    else if (!blitPage)
+    {
+        if (videoFillsCrop && !keyed)
+            FillRect(hdc, bounds, static_cast<HBRUSH>(GetStockObject(BLACK_BRUSH)));
+        else
+            g_originalOleDraw(unknown, aspect, hdc, bounds);
+    }
+    if (!stream->sessionActive)
+        return S_OK;
 
     EnterCriticalSection(&stream->lock);
     if (stream->rolloff)
@@ -1585,8 +1749,7 @@ HRESULT WINAPI HookOleDraw(LPUNKNOWN unknown, DWORD aspect, HDC hdc, LPCRECT bou
     LeaveCriticalSection(&stream->lock);
     UpdateBrowserGain(stream);
     EnterCriticalSection(&stream->lock);
-    if (stream->controlWrite)
-        SendBrowserControl(stream);
+    SendBrowserControl(stream);
 
     // Pre-roll, then present: with audio, the frame that matches what the speaker has played;
     // without, one frame per interval on the performance counter. Underruns hold the last
@@ -1597,8 +1760,12 @@ HRESULT WINAPI HookOleDraw(LPUNKNOWN unknown, DWORD aspect, HDC hdc, LPCRECT bou
     {
         if (stream->liveReady && stream->livePresent)
         {
-            if (!stream->paused)
+            // Paused holds the frame shown, but a session that starts paused still gets its first.
+            if (!stream->paused || !stream->livePresented)
+            {
                 std::memcpy(stream->livePresent, stream->liveFrame, stream->frameBytes);
+                stream->livePresented = true;
+            }
             shown = stream->livePresent;
             stream->playing = true;
         }
@@ -1675,7 +1842,7 @@ HRESULT WINAPI HookOleDraw(LPUNKNOWN unknown, DWORD aspect, HDC hdc, LPCRECT bou
         info.bmiHeader.biBitCount = 32;
         info.bmiHeader.biCompression = BI_RGB;
         const int bx = x + stream->videoX, by = y + stream->videoY;
-        if (stream->keyed && EnsureKeySurface(stream, hdc))
+        if (keyed && EnsureKeySurface(stream, hdc))
         {
             // Read the page under the box, put video where it painted the key colour, write back.
             BitBlt(stream->keyDc, 0, 0, stream->videoWidth, stream->videoHeight, hdc, bx, by, SRCCOPY);
@@ -1697,7 +1864,7 @@ HRESULT WINAPI HookOleDraw(LPUNKNOWN unknown, DWORD aspect, HDC hdc, LPCRECT bou
     else
     {
         RECT videoBox = {x + stream->videoX, y + stream->videoY, x + stream->videoX + stream->videoWidth, y + stream->videoY + stream->videoHeight};
-        FillRect(hdc, &videoBox, static_cast<HBRUSH>(GetStockObject(BLACK_BRUSH)));
+        FillRect(hdc, &videoBox, clear ? clearBrush : static_cast<HBRUSH>(GetStockObject(BLACK_BRUSH)));
         SetBkMode(hdc, TRANSPARENT);
         SetTextColor(hdc, RGB(255, 255, 255));
         TextOutW(hdc, videoBox.left + 10, videoBox.top + 10, stream->source, static_cast<int>(std::wcslen(stream->source)));
@@ -1738,8 +1905,14 @@ HRESULT STDMETHODCALLTYPE HookOleClose(IOleObject* self, DWORD saveOption)
             if (stream)
             {
                 DebugLog(L"aisp.hook: screen closed: %s\n", stream->source);
+                char note[600] = {};
+                StringCchPrintfA(note, 600, "screen closed: %ls\r\n", stream->source);
+                LogLine(note);
                 StopSession(stream);
+                StopPrimaryBrowser(stream);
                 FreeRings(stream);
+                FreePrimary(stream);
+                ReleaseSynthesizedDocument(stream);
                 EnterCriticalSection(&stream->lock);
                 if (stream->html)
                 {
@@ -1764,8 +1937,9 @@ HRESULT STDMETHODCALLTYPE HookNavigate(IWebBrowser2* self, BSTR url, VARIANT* fl
 {
     BSTR rewritten = RewriteScreenUrl(url);
     if (rewritten)
-        OnScreenNavigate(self, url);
-    const HRESULT hr = g_originalNavigate(self, rewritten ? rewritten : url, flags, targetFrameName, postData, headers);
+        OnScreenNavigate(self, url, rewritten);
+    // With Electron as the page, IE is not navigated: the client's document comes from the hook.
+    const HRESULT hr = rewritten && UsePrimaryBrowser() ? S_OK : g_originalNavigate(self, rewritten ? rewritten : url, flags, targetFrameName, postData, headers);
     if (rewritten)
         SysFreeString(rewritten);
     return hr;
@@ -1778,7 +1952,12 @@ HRESULT STDMETHODCALLTYPE HookNavigate2(IWebBrowser2* self, VARIANT* url, VARIAN
         BSTR rewritten = RewriteScreenUrl(V_BSTR(url));
         if (rewritten)
         {
-            OnScreenNavigate(self, V_BSTR(url));
+            OnScreenNavigate(self, V_BSTR(url), rewritten);
+            if (UsePrimaryBrowser())
+            {
+                SysFreeString(rewritten);
+                return S_OK; // Electron has the page; IE is not navigated
+            }
             VARIANT replaced;
             VariantInit(&replaced);
             V_VT(&replaced) = VT_BSTR;
@@ -1789,6 +1968,59 @@ HRESULT STDMETHODCALLTYPE HookNavigate2(IWebBrowser2* self, VARIANT* url, VARIAN
         }
     }
     return g_originalNavigate2(self, url, flags, targetFrameName, postData, headers);
+}
+
+// In primary mode the WebBrowser is never navigated. The client does not wait for
+// DocumentComplete: its screen object polls IWebBrowser2::get_Document every frame until a
+// document comes back, then queries it for IHTMLDocument2/3 and the script dispatch and reads the
+// page from there (verified in this client build: the movie player's per-frame update at
+// 0x6f1f80 does exactly that). So handing it the synthesized document from get_Document, with
+// get_ReadyState reporting complete, is all the control has to do.
+
+// The screen a WebBrowser belongs to, by identity, or nullptr.
+ScreenStream* StreamOfBrowser(IWebBrowser2* self)
+{
+    IUnknown* identity = IdentityOf(reinterpret_cast<IUnknown*>(self));
+    if (!identity)
+        return nullptr;
+    ScreenStream* found = nullptr;
+    EnterCriticalSection(&g_streamsLock);
+    for (ScreenStream* stream = g_streams; stream && !found; stream = stream->next)
+        if (stream->browser == identity)
+            found = stream;
+    LeaveCriticalSection(&g_streamsLock);
+    identity->lpVtbl->Release(identity);
+    return found;
+}
+
+// IWebBrowser2::get_Document: for a screen in primary mode, the synthesized document.
+HRESULT STDMETHODCALLTYPE HookGetDocument(IWebBrowser2* self, IDispatch** out)
+{
+    if (out && UsePrimaryBrowser())
+    {
+        ScreenStream* stream = StreamOfBrowser(self);
+        if (stream && stream->pageUrl[0])
+        {
+            *out = reinterpret_cast<IDispatch*>(SynthesizedDocument(stream));
+            return S_OK;
+        }
+    }
+    return g_originalGetDocument(self, out);
+}
+
+// IWebBrowser2::get_ReadyState: a screen in primary mode is complete as soon as it has a page.
+HRESULT STDMETHODCALLTYPE HookGetReadyState(IWebBrowser2* self, READYSTATE* out)
+{
+    if (out && UsePrimaryBrowser())
+    {
+        ScreenStream* stream = StreamOfBrowser(self);
+        if (stream && stream->pageUrl[0])
+        {
+            *out = READYSTATE_COMPLETE;
+            return S_OK;
+        }
+    }
+    return g_originalGetReadyState(self, out);
 }
 
 // All WebBrowser instances share ieframe's vtable, so one patch covers every screen.
@@ -1807,8 +2039,12 @@ void PatchWebBrowserVtable(IUnknown* unknown)
     {
         g_originalNavigate = vtable->Navigate;
         g_originalNavigate2 = vtable->Navigate2;
+        g_originalGetDocument = vtable->get_Document;
+        g_originalGetReadyState = vtable->get_ReadyState;
         vtable->Navigate = HookNavigate;
         vtable->Navigate2 = HookNavigate2;
+        vtable->get_Document = HookGetDocument;
+        vtable->get_ReadyState = HookGetReadyState;
         DWORD ignored = 0;
         VirtualProtect(vtable, sizeof(*vtable), oldProtect, &ignored);
         g_webBrowserPatched = true;
@@ -1949,6 +2185,44 @@ void PatchLoadedModules()
     CloseHandle(snapshot);
 }
 
+// The hooks must be in place before the game runs a single instruction: the launcher injects
+// this DLL into the suspended process and resumes it as soon as LoadLibrary returns, and the
+// client sets its code page and creates its browser controls right at startup. So on Windows
+// this runs inline in DllMain. Under Wine the loader holds the process lock for DllMain and
+// enumerating modules or VirtualProtect of other IAT entries from there never returns, so
+// there it runs on a thread once that lock is dropped, accepting the late start.
+DWORD WINAPI InitHooksThread(LPVOID deferred)
+{
+    if (deferred)
+        Sleep(500);
+    ResetInitLog();
+    AppendInitLog("init: start");
+    InitBrowserMode();
+    AppendInitLog("init: browser mode");
+    // The screen hooks only concern the game executable's own imports (the ATL host is
+    // linked into it); other modules keep the real functions.
+    InitScreenBase();
+    AppendInitLog("init: screen base");
+    PatchSingleImport(GetModuleHandleW(nullptr), "ole32.dll", "CoCreateInstance", reinterpret_cast<void*>(HookCoCreateInstance), &g_originalCoCreateInstance);
+    PatchSingleImport(GetModuleHandleW(nullptr), "ole32.dll", "OleDraw", reinterpret_cast<void*>(HookOleDraw), &g_originalOleDraw);
+    AppendInitLog("init: ole32 patched");
+    PatchTvCommentButton();
+    AppendInitLog("init: tv button");
+    PatchNicoliveReloadNotify();
+    AppendInitLog("init: reload notify");
+    PatchHttps();
+    AppendInitLog("init: https");
+    // Walking every module's kernel32 IAT from a worker still kills the process under
+    // Wine 9. Locale patches are not required for the screen blit; skip them here.
+    if (!IsRunningOnWine())
+    {
+        PatchLoadedModules();
+        AppendInitLog("init: modules patched");
+    }
+    AppendInitLog("init: done");
+    return 0;
+}
+
 } // namespace aisp
 
 using namespace aisp;
@@ -1957,14 +2231,16 @@ BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID)
     if (reason == DLL_PROCESS_ATTACH)
     {
         DisableThreadLibraryCalls(instance);
-        PatchLoadedModules();
-        // The screen hooks only concern the game executable's own imports (the ATL host is
-        // linked into it); other modules keep the real functions.
-        InitScreenBase();
-        PatchSingleImport(GetModuleHandleW(nullptr), "ole32.dll", "CoCreateInstance", reinterpret_cast<void*>(HookCoCreateInstance), &g_originalCoCreateInstance);
-        PatchSingleImport(GetModuleHandleW(nullptr), "ole32.dll", "OleDraw", reinterpret_cast<void*>(HookOleDraw), &g_originalOleDraw);
-        PatchTvCommentButton();
-        PatchHttps();
+        if (!IsRunningOnWine())
+        {
+            InitHooksThread(nullptr);
+        }
+        else
+        {
+            HANDLE thread = CreateThread(nullptr, 0, InitHooksThread, reinterpret_cast<LPVOID>(1), 0, nullptr);
+            if (thread)
+                CloseHandle(thread);
+        }
     }
     return TRUE;
 }

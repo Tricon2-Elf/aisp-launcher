@@ -79,6 +79,7 @@ struct ScreenStream
     BYTE* livePresent = nullptr;
     bool liveVideo = false;              // the browser source: blit the latest paint, no ffmpeg-style queue
     bool liveReady = false;
+    bool livePresented = false;          // livePresent holds a frame (a paused start still shows one)
     DWORD frameBytes = 0;
     int capacity = 0;
     LONGLONG videoWritten = 0;
@@ -100,11 +101,60 @@ struct ScreenStream
     bool pageScrollLock = false;         // any scroll extra in the title: hide scrollbars and pin offset
     float pageScale = 1.0f;              // scale= from the page title (browser zoom; 1 = 100%)
     float sessionScale = 1.0f;           // scale the running browser session was started with
+    // run= from the page title: a script URL (root-relative to the screen page, or absolute)
+    // the browser host fetches and runs in an electron: source's page once it has loaded (a
+    // site's own player button, a layout switch). A change restarts the session.
+    wchar_t pageRun[1024] = {};
+    wchar_t sessionRun[1024] = {};
     HANDLE controlWrite = nullptr;       // named pipe to a source process that takes live commands
     int sentScroll[2] = {0x7FFFFFFF, 0x7FFFFFFF};
     int sentScrollLock = -1;
     float sentScale = -1.0f;
     int sentMute = -1;
+    // Primary Electron (the default; [screens] primary_browser=ie opts out): paints the page, reports its
+    // title and answers the client's page reads (document.cpp), so ieframe neither draws nor
+    // navigates. Secondary electron:/ffmpeg still composites.
+    wchar_t pageUrl[4096] = {};          // rewritten screen URL this control navigated to
+    wchar_t electronTitle[1024] = {};    // latest document.title from the primary host
+    bool electronTitleNew = false;       // set by the video thread, cleared when applied
+    // The page is laid out from the control's origin and the crop sits at (x, y) in it, so
+    // the primary renders (x + width) x (y + height) and the blit takes the crop out of that.
+    int pageViewWidth = 0, pageViewHeight = 0;
+    BYTE* pageFrame = nullptr;           // latest primary paint, view-sized
+    BYTE* pagePresent = nullptr;         // the crop of it being shown, width x height
+    bool pageReady = false;
+    DWORD pageBytes = 0;                 // of pageFrame
+    DWORD pagePresentBytes = 0;
+    HANDLE primaryProcess = nullptr;
+    HANDLE primaryControl = nullptr;
+    HANDLE primaryVideo = nullptr;      // framed: frames, title lines and call replies
+    HANDLE primaryThread = nullptr;
+    bool primaryActive = false;
+    // One script call in flight at a time (CallPrimary, main thread); the video thread
+    // completes it. The client's page reads are answered through this.
+    HANDLE primaryCallEvent = nullptr;
+    DWORD primaryCallId = 0;
+    DWORD primaryCallDone = 0;
+    bool primaryCallOk = false;
+    bool primaryCallLoading = false;     // the host answered `loading`: the page is not there yet
+    char primaryCallResult[16384] = {};
+    // [screens] stats: what the client's page reads cost through Electron, per log interval.
+    DWORD primaryReadsStatus = 0;        // getElementById("statusForm")
+    DWORD primaryReadsOther = 0;         // every other id (the retX getters)
+    DWORD primaryEvals = 0;              // execScript forwarded
+    DWORD primaryReadsFailed = 0;        // timed out or no value
+    DWORD primaryReadsLoading = 0;       // answered "loading": the page was not there yet
+    double primaryWaitMs = 0;            // game thread time spent waiting for replies
+    double primaryWaitMaxMs = 0;
+    ULONGLONG primaryStatsAt = 0;
+    void* syntheticDocument = nullptr;   // document.cpp: what get_Document hands the client in primary mode
+    volatile LONG primaryStop = 0;
+    int sentPrimaryMute = -1;
+    float sentPrimaryGain = -1.0f;
+    int sentPrimaryPaint = -1;           // paint 0/1: whether the host produces frames at all
+    ULONGLONG primaryRetryAt = 0;        // tick after which a failed start may be tried again
+    bool electronTcp = false;            // Wine: secondary electron: uses loopback TCP, not a named pipe
+    bool primaryTcp = false;
     // A video's shared timeline from the title: at start=<unix seconds> it was at offset=<s>
     // and playing; paused=<unix seconds> is when it stopped advancing. A source that can seek
     // starts at the position this implies (TimelinePosition); a change of start or offset
@@ -115,11 +165,32 @@ struct ScreenStream
     double sessionStart = 0, sessionOffset = 0; // the timeline the running session was started for
     double seekSeconds = 0;              // where the running session was told to begin
     bool paused = false;                 // presenter and renderer hold
+    // What the page is told about the media (page_state.cpp pushes it into the primary as
+    // window.aisp): the title yt-dlp knows or a browser secondary's own document.title, the
+    // duration, and where the current run of the media began, so that the position is
+    // runSeek + (videoPos - runStartFrame) / fps (a looped video's next run starts over).
+    wchar_t mediaTitle[512] = {};
+    double mediaDuration = 0;            // seconds; 0 unknown or live
+    double runSeek = 0;
+    LONGLONG runStartFrame = 0;
+    ULONGLONG statePushedAt = 0;
+    ULONGLONG stateLoggedAt = 0;
+    char stateSent[3072] = {};           // the last object pushed; the same one is not sent again
     // Colour keying: when the page names a key colour, only the pixels of the page that are
     // exactly that colour receive video; anything else the page draws inside the box stays on
     // top (the overlay-surface trick of the DirectDraw era).
     bool keyed = false;
     DWORD keyColor = 0;                  // 0x00RRGGBB
+    // clear=1 (or clear=rrggbb): the page is not shown at all. The crop is filled with the
+    // clear colour (by default the key colour, or the off-black the room TVs key on) and the
+    // video is put over it plainly, so the source is the only thing rendering; the primary
+    // Electron is told to stop painting meanwhile. A page sets it when its video box is the
+    // whole crop and nothing of its own is over the video; it is also what shows while a page
+    // reloads over a running source.
+    bool pageClear = false;
+    DWORD clearColor = 0;                // 0x00RRGGBB
+    HBRUSH clearBrush = nullptr;
+    DWORD clearBrushColor = 0;
     HDC keyDc = nullptr;
     HBITMAP keyBitmap = nullptr;
     HGDIOBJ keyOldBitmap = nullptr;
@@ -167,6 +238,7 @@ struct ScreenStream
     bool sessionActive = false;
     ULONGLONG sessionStarted = 0;
     ULONGLONG lastDraw = 0;
+    ULONGLONG lastRead = 0;              // the client's last page read (document.cpp): the screen is in use even unseen
     LONG underruns = 0;                  // audio ran dry (playback held) since the session started
     LONG videoWaits = 0;                 // reader held because the frame ring was full
     LONG videoDrops = 0;                 // oldest frames discarded while audio could not drive playback yet
@@ -196,6 +268,10 @@ extern bool g_logStats;
 void LogLine(const char* text);
 void DebugLog(const wchar_t* format, const wchar_t* arg);
 bool BuildGameFilePath(const wchar_t* fileName, wchar_t* outPath, size_t outPathCount);
+// aisp.hook.init.log next to the game: one line per init step, so a hook that never got as far
+// as the screen log can still be seen. Reset at the start of the init, appended after.
+void ResetInitLog();
+void AppendInitLog(const char* text);
 // The line the screen shows while a source has nothing to draw yet (or failed).
 void SetStatus(ScreenStream* stream, const wchar_t* text);
 
@@ -203,6 +279,9 @@ void SetStatus(ScreenStream* stream, const wchar_t* text);
 // directory; attached to the job so they die with the game, stderr to the log.
 bool ToolPath(const wchar_t* variable, const wchar_t* key, const wchar_t* fallback, wchar_t* out, size_t outCount);
 HANDLE LaunchTool(wchar_t* commandLine, HANDLE stdIn, HANDLE stdOut);
+// Electron/Node under Wine crash if stdout is a Wine file or pipe (uv_pipe_open EINVAL), so the
+// browser host starts with NUL stdio, hidden, in the job.
+HANDLE LaunchBrowserHost(wchar_t* commandLine);
 bool CreateInheritablePipe(HANDLE* readEnd, HANDLE* writeEnd, bool inheritRead);
 bool RunToolForLine(wchar_t* commandLine, wchar_t* out, size_t outCount);
 // Up to maxLines lines of a tool's stdout (each up to lineCount characters); returns the count.
@@ -227,6 +306,7 @@ void SendBrowserControl(ScreenStream* stream);
 void UpdateBrowserGain(ScreenStream* stream);
 // A named pipe for the browser host, with its name in `name` for the host's command line.
 HANDLE CreateNamedPipePair(wchar_t* name, size_t nameCount, const wchar_t* tag);
+bool ConnectNamedPipeWait(HANDLE pipe, volatile LONG* stop, int tries = 160);
 
 // Audio ring -> WASAPI (aisp.hook.cpp). A source with audio starts this thread once its samples
 // are on the way and sets audioActive so the presenter follows the device clock.

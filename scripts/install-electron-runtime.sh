@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
-# Stock Electron (win32-x64) next to the game for electron:<url> screens. The 32-bit hook
-# launches electron.exe as a separate process; 64-bit Chromium is fine (and is what has H.264).
-# App sources live in aisp.electron/app/; this script unpacks the official zip and copies them.
+# Stock Electron next to the game for electron:<url> screens and the primary browser. The
+# 32-bit hook launches electron.exe as a separate process; 64-bit Chromium is fine on Windows
+# (and is what has H.264). Under Wine the hook does not use an exe in the prefix at all: it
+# runs a native Electron through aisp.electron/host.js (a linux-* archive here, or any
+# installed one). App sources live in aisp.electron/app/; this script unpacks the official zip
+# and copies them.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -34,5 +37,8 @@ mkdir -p "$DESTINATION"
 unzip -q -o "$CACHE/$ARCHIVE" -d "$DESTINATION"
 install -Dm644 "$ROOT/aisp.electron/app/main.js" "$DESTINATION/app/main.js"
 install -Dm644 "$ROOT/aisp.electron/app/package.json" "$DESTINATION/app/package.json"
+if [[ "$ARCH" == linux-* ]]; then
+    chmod +x "$DESTINATION/electron" 2>/dev/null || true
+fi
 
 echo "Installed Electron $VERSION ($ARCH) runtime: $DESTINATION"

@@ -157,19 +157,29 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="aisp.hook.cpp" />
+    <ClCompile Include="browser.cpp" />
+    <ClCompile Include="document.cpp" />
+    <ClCompile Include="ytdlp.cpp" />
+    <ClCompile Include="page_state.cpp" />
     <ClCompile Include="screen.cpp" />
     <ClCompile Include="source.cpp" />
     <ClCompile Include="source_electron.cpp" />
     <ClCompile Include="source_ffmpeg.cpp" />
     <ClCompile Include="source_pattern.cpp" />
     <ClCompile Include="tv_panel.cpp" />
+    <ClCompile Include="reload_notify.cpp" />
     <ClCompile Include="https.cpp" />
     <ClCompile Include="config.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="browser.h" />
+    <ClInclude Include="document.h" />
+    <ClInclude Include="ytdlp.h" />
+    <None Include="fake_vtables.inc" />
     <ClInclude Include="screen.h" />
     <ClInclude Include="source.h" />
     <ClInclude Include="tv_panel.h" />
+    <ClInclude Include="reload_notify.h" />
     <ClInclude Include="https.h" />
     <ClInclude Include="config.h" />
   </ItemGroup>

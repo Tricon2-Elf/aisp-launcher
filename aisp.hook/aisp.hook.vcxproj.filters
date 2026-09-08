@@ -34,10 +34,25 @@
     <ClCompile Include="tv_panel.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="reload_notify.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="https.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="config.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="browser.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="document.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="ytdlp.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="page_state.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>
@@ -51,10 +66,22 @@
     <ClInclude Include="tv_panel.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="reload_notify.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="https.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="config.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="browser.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="document.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="ytdlp.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>

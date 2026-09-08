@@ -6,6 +6,8 @@
 #include <initializer_list>
 
 #include "tv_panel.h"
+#include "browser.h"
+#include "document.h"
 
 // The client's own methods are thiscall; spelt for both compilers that build this DLL.
 #if defined(_MSC_VER)
@@ -46,6 +48,14 @@ namespace aisp
 //    pixel right and down, and two pixels down for the hidden state's hover and mousedown.
 // There is no network message for this field, so the toggle is local to this client, as the
 // panel's mute button is.
+//
+// The page owns what the button does: every press reaches it as ext_setCommentVisible(true)
+// and it decides (screen.html cycles its overlay pages, off after the last). The client keeps
+// its own comment byte for the button glyph, written only by its SetCommentVisible and never
+// read back from the page after the load, so the click stub copies the page's answer into it:
+// after the call it asks the primary's page through the page's own getter, ext_isCommentVisible
+// (the one the client reads once at load), and stores that, then refreshes the panel. With the
+// IE primary the page cannot be asked and the byte stays on.
 
 using UnitApply_t = int(__cdecl*)(void* control, void* unitHandle, int frame, int a, int b);
 UnitApply_t g_originalToggleApplyUnit = reinterpret_cast<UnitApply_t>(0x77C300);
@@ -66,6 +76,34 @@ void NudgeControl(void* control, int dx, int dy)
     auto setY = reinterpret_cast<Set_t>(vtable[0x5C / 4]);
     setX(control, getX(control) + dx);
     setY(control, getY(control) + dy);
+}
+
+// The TV object's SetCommentVisible (0x48B520): stores the bool at TV+0x12 and, with the player
+// ready, has the page's ext_setCommentVisible called (queued otherwise).
+using SetCommentVisible_t = bool(AISP_THISCALL*)(void* tv, int visible);
+
+// A press of the comment button for the TV: the page gets it, and the client's byte follows
+// what the page then shows. The page's script object lives at ((TV+0xc)->+4), with the document
+// the client took from the control at +0x48 of it (the hook's own in primary mode).
+void __cdecl CommentButtonPressed(void* tv)
+{
+    reinterpret_cast<SetCommentVisible_t>(0x48B520)(tv, 1);
+    BYTE* player = *reinterpret_cast<BYTE**>(static_cast<BYTE*>(tv) + 0xC);
+    if (!player)
+        return;
+    IUnknown* document = *reinterpret_cast<IUnknown**>(player + 4 + 0x48);
+    ScreenStream* stream = document ? StreamOfSynthesizedDocument(document) : nullptr;
+    if (!stream)
+        return;
+    char value[32] = {};
+    // In order behind the eval the client just sent, so this reads the state after the press.
+    // Called the way the client calls a getter, with no argument; the client would wrap the
+    // value in an element of its own to read it, here it comes back directly.
+    static const char kRead[] =
+        "(function(){var e=document.getElementById('external_nico_0');"
+        "return e&&typeof e.ext_isCommentVisible==='function'?String(e.ext_isCommentVisible()):''})()";
+    if (CallPrimary(stream, kRead, value, sizeof(value), 250) && value[0])
+        static_cast<BYTE*>(tv)[0x12] = value[0] == '1' ? 1 : 0;
 }
 
 int __cdecl CommentButtonApplyUnit(void* control, void* unitHandle, int frame, int a, int b)
@@ -139,7 +177,6 @@ void PatchTvCommentButton()
     BYTE* stubs = static_cast<BYTE*>(VirtualAlloc(nullptr, 128, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
     if (!stubs)
         return;
-    const DWORD setCommentVisible = 0x48B520;
     const DWORD refreshPanel = 0x647DD0;
     const DWORD setToggleState = 0x647000;
     const DWORD epilogue = 0x649E5D;
@@ -153,12 +190,9 @@ void PatchTvCommentButton()
     BYTE* clickStub = stubs + n;
     emit({0x85, 0xF6});                                   // test esi,esi        ; no TV object
     const size_t jzNoTv = n; emit({0x74, 0x00});          // jz   done
-    emit({0x8B, 0x4F, 0x08});                             // mov  ecx,[edi+8]    ; TV object (this)
-    emit({0x80, 0x7E, 0x02, 0x00});                       // cmp  byte [esi+2],0 ; comment flag
-    emit({0x0F, 0x94, 0xC0});                             // sete al             ; the inverse
-    emit({0x0F, 0xB6, 0xC0});                             // movzx eax,al
-    emit({0x50});                                         // push eax
-    emitCall(setCommentVisible);                          // callee pops the argument
+    emit({0xFF, 0x77, 0x08});                             // push [edi+8]        ; TV object
+    emitCall(reinterpret_cast<DWORD>(&CommentButtonPressed)); // the page gets the press, the byte follows it
+    emit({0x83, 0xC4, 0x04});                             // add  esp,4          ; cdecl
     emit({0x8B, 0x8D}); emitDword(0x12C);                 // mov  ecx,[ebp+0x12C] ; inner panel
     emit({0x85, 0xC9});                                   // test ecx,ecx
     const size_t jzNoPanel = n; emit({0x74, 0x00});       // jz   done
@@ -223,7 +257,7 @@ void PatchTvCommentButton()
     *tableSlot = reinterpret_cast<DWORD>(clickStub);
     DWORD ignored = 0;
     VirtualProtect(tableSlot, sizeof(*tableSlot), oldProtect, &ignored);
-    OutputDebugStringW(L"aisp.hook: TV comment button: toggles comments locally\n");
+    OutputDebugStringW(L"aisp.hook: TV comment button: presses go to the page\n");
 }
 
 } // namespace aisp

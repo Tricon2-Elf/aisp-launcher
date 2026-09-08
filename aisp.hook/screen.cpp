@@ -1,6 +1,7 @@
 // Shared screen state and helpers; see screen.h.
 #include "screen.h"
 #include "config.h"
+#include "browser.h"
 
 #include <strsafe.h>
 #include <cmath>
@@ -57,6 +58,30 @@ HANDLE OpenScreenLog()
     return g_toolLog;
 }
 
+void ResetInitLog()
+{
+    wchar_t path[MAX_PATH] = {};
+    if (!BuildGameFilePath(L"aisp.hook.init.log", path, MAX_PATH))
+        return;
+    HANDLE file = CreateFileW(path, GENERIC_WRITE, FILE_SHARE_READ, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file != INVALID_HANDLE_VALUE)
+        CloseHandle(file);
+}
+
+void AppendInitLog(const char* text)
+{
+    wchar_t path[MAX_PATH] = {};
+    if (!BuildGameFilePath(L"aisp.hook.init.log", path, MAX_PATH))
+        return;
+    HANDLE file = CreateFileW(path, FILE_APPEND_DATA, FILE_SHARE_READ, nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file == INVALID_HANDLE_VALUE)
+        return;
+    DWORD written = 0;
+    WriteFile(file, text, static_cast<DWORD>(std::strlen(text)), &written, nullptr);
+    WriteFile(file, "\r\n", 2, &written, nullptr);
+    CloseHandle(file);
+}
+
 void LogLine(const char* text)
 {
     if (OpenScreenLog() == INVALID_HANDLE_VALUE)
@@ -100,6 +125,69 @@ bool ToolPath(const wchar_t* variable, const wchar_t* key, const wchar_t* fallba
 
 // Starts a child with the given standard handles (nullptr = the log file / nothing) and puts it
 // in the job. The command line buffer is modified by CreateProcessW.
+namespace
+{
+// CreateProcess with inheritance on hands the child every inheritable handle in the process,
+// not just its std handles. Sessions start their tools concurrently, so a tool started while
+// another session held a pipe end open kept that pipe too: the other session's read never saw
+// EOF once its own tool had exited, its source thread sat in ReadFile until the stranger
+// ended, and the stop that joins it waited its whole timeout. The child gets an explicit handle
+// list instead: its own std handles, nothing else. Without the attribute (the list API failing)
+// it falls back to plain inheritance.
+HANDLE StartProcess(wchar_t* commandLine, STARTUPINFOW& startup)
+{
+    HANDLE handles[3] = {};
+    DWORD count = 0;
+    const HANDLE candidates[3] = {startup.hStdInput, startup.hStdOutput, startup.hStdError};
+    for (HANDLE candidate : candidates)
+    {
+        DWORD flags = 0;
+        if (!candidate || candidate == INVALID_HANDLE_VALUE || !GetHandleInformation(candidate, &flags) || !(flags & HANDLE_FLAG_INHERIT))
+            continue;
+        bool listed = false;
+        for (DWORD i = 0; i < count; ++i)
+            listed = listed || handles[i] == candidate;
+        if (!listed)
+            handles[count++] = candidate;
+    }
+
+    STARTUPINFOEXW extended = {};
+    extended.StartupInfo = startup;
+    extended.StartupInfo.cb = sizeof(extended);
+    SIZE_T size = 0;
+    InitializeProcThreadAttributeList(nullptr, 1, 0, &size);
+    LPPROC_THREAD_ATTRIBUTE_LIST list = size ? static_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(HeapAlloc(GetProcessHeap(), 0, size)) : nullptr;
+    DWORD flags = CREATE_NO_WINDOW;
+    bool listed = false;
+    if (list && count && InitializeProcThreadAttributeList(list, 1, 0, &size))
+    {
+        if (UpdateProcThreadAttribute(list, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, handles, count * sizeof(HANDLE), nullptr, nullptr))
+        {
+            extended.lpAttributeList = list;
+            flags |= EXTENDED_STARTUPINFO_PRESENT;
+            listed = true;
+        }
+        else
+            DeleteProcThreadAttributeList(list);
+    }
+    if (!listed)
+        extended.StartupInfo.cb = sizeof(STARTUPINFOW);
+
+    PROCESS_INFORMATION info = {};
+    const BOOL ok = CreateProcessW(nullptr, commandLine, nullptr, nullptr, TRUE, flags, nullptr, nullptr, &extended.StartupInfo, &info);
+    if (listed)
+        DeleteProcThreadAttributeList(list);
+    if (list)
+        HeapFree(GetProcessHeap(), 0, list);
+    if (!ok)
+        return nullptr;
+    if (g_job)
+        AssignProcessToJobObject(g_job, info.hProcess);
+    CloseHandle(info.hThread);
+    return info.hProcess;
+}
+} // namespace
+
 HANDLE LaunchTool(wchar_t* commandLine, HANDLE stdIn, HANDLE stdOut)
 {
     STARTUPINFOW startup = {};
@@ -108,14 +196,25 @@ HANDLE LaunchTool(wchar_t* commandLine, HANDLE stdIn, HANDLE stdOut)
     startup.hStdInput = stdIn ? stdIn : GetStdHandle(STD_INPUT_HANDLE);
     startup.hStdOutput = stdOut ? stdOut : g_toolLog;
     startup.hStdError = g_toolLog;
+    return StartProcess(commandLine, startup);
+}
 
-    PROCESS_INFORMATION info = {};
-    if (!CreateProcessW(nullptr, commandLine, nullptr, nullptr, TRUE, CREATE_NO_WINDOW, nullptr, nullptr, &startup, &info))
-        return nullptr;
-    if (g_job)
-        AssignProcessToJobObject(g_job, info.hProcess);
-    CloseHandle(info.hThread);
-    return info.hProcess;
+HANDLE LaunchBrowserHost(wchar_t* commandLine)
+{
+    SECURITY_ATTRIBUTES inheritable = {sizeof(SECURITY_ATTRIBUTES), nullptr, TRUE};
+    HANDLE nul = CreateFileW(L"NUL", GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, &inheritable, OPEN_EXISTING, 0, nullptr);
+    if (nul == INVALID_HANDLE_VALUE)
+        return LaunchTool(commandLine, nullptr, nullptr);
+    STARTUPINFOW startup = {};
+    startup.cb = sizeof(startup);
+    startup.dwFlags = STARTF_USESTDHANDLES | STARTF_USESHOWWINDOW;
+    startup.wShowWindow = SW_HIDE;
+    startup.hStdInput = nul;
+    startup.hStdOutput = nul;
+    startup.hStdError = nul;
+    HANDLE process = StartProcess(commandLine, startup);
+    CloseHandle(nul);
+    return process;
 }
 
 bool CreateInheritablePipe(HANDLE* readEnd, HANDLE* writeEnd, bool inheritRead)
@@ -137,6 +236,23 @@ HANDLE CreateNamedPipePair(wchar_t* name, size_t nameCount, const wchar_t* tag)
     return CreateNamedPipeW(name, PIPE_ACCESS_DUPLEX | FILE_FLAG_FIRST_PIPE_INSTANCE, PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_NOWAIT, 1, 1 << 20, 1 << 20, 0, nullptr);
 }
 
+bool ConnectNamedPipeWait(HANDLE pipe, volatile LONG* stop, int tries)
+{
+    for (int i = 0; i < tries; ++i)
+    {
+        if (stop && *stop)
+            return false;
+        if (ConnectNamedPipe(pipe, nullptr) || GetLastError() == ERROR_PIPE_CONNECTED)
+        {
+            DWORD mode = PIPE_READMODE_BYTE | PIPE_WAIT;
+            SetNamedPipeHandleState(pipe, &mode, nullptr, nullptr);
+            return true;
+        }
+        Sleep(50);
+    }
+    return false;
+}
+
 void PushLiveFrame(ScreenStream* stream, const BYTE* frame)
 {
     EnterCriticalSection(&stream->lock);
@@ -148,35 +264,37 @@ void PushLiveFrame(ScreenStream* stream, const BYTE* frame)
 
 void SendBrowserControl(ScreenStream* stream)
 {
-    if (!stream->controlWrite)
-        return;
-    const int hide = stream->pageScrollLock ? 1 : 0;
-    // The gain line is the fader; mute is the title mute plus a hard cut once the screen is
-    // effectively out of earshot, in case some page audio escapes the page-side scaler.
-    const int mute = stream->muted || (stream->rolloff && stream->distanceGain < 0.02f) ? 1 : 0;
-    DWORD written = 0;
-    if (stream->pageScroll[0] != stream->sentScroll[0] || stream->pageScroll[1] != stream->sentScroll[1]
-        || hide != stream->sentScrollLock || stream->pageScale != stream->sentScale || mute != stream->sentMute)
+    if (stream->controlWrite)
     {
-        char line[128] = {};
-        StringCchPrintfA(line, 128, "scroll %d %d %d\nscale %.4f\nmute %d\n", stream->pageScroll[0], stream->pageScroll[1], hide, stream->pageScale > 0 ? stream->pageScale : 1.0f, mute);
-        WriteFile(stream->controlWrite, line, static_cast<DWORD>(std::strlen(line)), &written, nullptr);
-        stream->sentScroll[0] = stream->pageScroll[0];
-        stream->sentScroll[1] = stream->pageScroll[1];
-        stream->sentScrollLock = hide;
-        stream->sentScale = stream->pageScale;
-        stream->sentMute = mute;
+        const int hide = stream->pageScrollLock ? 1 : 0;
+        // The gain line is the fader; mute is the title mute plus a hard cut once the screen is
+        // effectively out of earshot, in case some page audio escapes the page-side scaler.
+        const int mute = stream->muted || (stream->rolloff && stream->distanceGain < 0.02f) ? 1 : 0;
+        if (stream->pageScroll[0] != stream->sentScroll[0] || stream->pageScroll[1] != stream->sentScroll[1]
+            || hide != stream->sentScrollLock || stream->pageScale != stream->sentScale || mute != stream->sentMute)
+        {
+            char line[128] = {};
+            StringCchPrintfA(line, 128, "scroll %d %d %d\nscale %.4f\nmute %d\n", stream->pageScroll[0], stream->pageScroll[1], hide, stream->pageScale > 0 ? stream->pageScale : 1.0f, mute);
+            WriteBrowserChannel(stream->controlWrite, stream->electronTcp, line, std::strlen(line));
+            stream->sentScroll[0] = stream->pageScroll[0];
+            stream->sentScroll[1] = stream->pageScroll[1];
+            stream->sentScrollLock = hide;
+            stream->sentScale = stream->pageScale;
+            stream->sentMute = mute;
+        }
+        // Its own deadband: walking towards a screen moves the gain every frame and the scroll and
+        // scale it is packed with do not change.
+        const float gain = stream->pageGain;
+        const float sent = stream->sentPageGain;
+        if (sent < 0.0f || gain <= sent - 0.002f || gain >= sent + 0.002f)
+        {
+            char line[32] = {};
+            StringCchPrintfA(line, 32, "gain %.4f\n", gain);
+            WriteBrowserChannel(stream->controlWrite, stream->electronTcp, line, std::strlen(line));
+            stream->sentPageGain = gain;
+        }
     }
-    // Its own deadband: walking towards a screen moves the gain every frame and the scroll and
-    // scale it is packed with do not change.
-    const float gain = stream->pageGain;
-    const float sent = stream->sentPageGain;
-    if (sent >= 0.0f && gain > sent - 0.002f && gain < sent + 0.002f)
-        return;
-    char line[32] = {};
-    StringCchPrintfA(line, 32, "gain %.4f\n", gain);
-    WriteFile(stream->controlWrite, line, static_cast<DWORD>(std::strlen(line)), &written, nullptr);
-    stream->sentPageGain = gain;
+    SendPrimaryControl(stream);
 }
 
 // Runs a tool to completion and returns its first stdout line (trimmed) in `out`.
