@@ -163,11 +163,15 @@
     <ClCompile Include="source_ffmpeg.cpp" />
     <ClCompile Include="source_pattern.cpp" />
     <ClCompile Include="tv_panel.cpp" />
+    <ClCompile Include="https.cpp" />
+    <ClCompile Include="config.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="screen.h" />
     <ClInclude Include="source.h" />
     <ClInclude Include="tv_panel.h" />
+    <ClInclude Include="https.h" />
+    <ClInclude Include="config.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)Microsoft.Cpp.targets" Condition="'$(_HasVisualCppTools)' == 'true'" />
   <ImportGroup Label="ExtensionTargets" Condition="'$(_HasVisualCppTools)' == 'true'" />

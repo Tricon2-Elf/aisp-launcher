@@ -1,5 +1,6 @@
 // Shared screen state and helpers; see screen.h.
 #include "screen.h"
+#include "config.h"
 
 #include <strsafe.h>
 #include <cmath>
@@ -39,9 +40,26 @@ bool BuildGameFilePath(const wchar_t* fileName, wchar_t* outPath, size_t outPath
 }
 
 
+HANDLE OpenScreenLog()
+{
+    if (g_toolLog != INVALID_HANDLE_VALUE)
+        return g_toolLog;
+    wchar_t logPath[MAX_PATH] = {};
+    if (!BuildGameFilePath(L"aisp.screen.log", logPath, MAX_PATH))
+        return INVALID_HANDLE_VALUE;
+    SECURITY_ATTRIBUTES inheritable = {sizeof(SECURITY_ATTRIBUTES), nullptr, TRUE};
+    HANDLE file = CreateFileW(logPath, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE, &inheritable, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file == INVALID_HANDLE_VALUE)
+        return INVALID_HANDLE_VALUE;
+    // Two threads may get here at once; the second one's handle is surplus.
+    if (InterlockedCompareExchangePointer(reinterpret_cast<PVOID volatile*>(&g_toolLog), file, INVALID_HANDLE_VALUE) != INVALID_HANDLE_VALUE)
+        CloseHandle(file);
+    return g_toolLog;
+}
+
 void LogLine(const char* text)
 {
-    if (g_toolLog == INVALID_HANDLE_VALUE)
+    if (OpenScreenLog() == INVALID_HANDLE_VALUE)
         return;
     // Our own lines carry the UTC time; the tools' stderr lines land in between as they are.
     SYSTEMTIME now = {};
@@ -63,14 +81,20 @@ void SetStatus(ScreenStream* stream, const wchar_t* text)
     DebugLog(L"aisp.hook: screen: %s\n", text);
 }
 
-// The tool path from the environment variable, or `fallback` relative to the game directory.
-bool ToolPath(const wchar_t* variable, const wchar_t* fallback, wchar_t* out, size_t outCount)
+// The tool path from the environment variable or [tools] key, else `fallback`; a relative
+// path is taken from the game directory.
+bool ToolPath(const wchar_t* variable, const wchar_t* key, const wchar_t* fallback, wchar_t* out, size_t outCount)
 {
-    if (GetEnvironmentVariableW(variable, out, static_cast<DWORD>(outCount)) == 0 || !out[0])
+    wchar_t configured[MAX_PATH] = {};
+    const wchar_t* path = ConfigString(variable, L"tools", key, configured, MAX_PATH) ? configured : fallback;
+    const bool absolute = path[0] == L'\\' || path[0] == L'/' || (path[0] && path[1] == L':');
+    if (absolute)
     {
-        if (!BuildGameFilePath(fallback, out, outCount))
+        if (FAILED(StringCchCopyW(out, outCount, path)))
             return false;
     }
+    else if (!BuildGameFilePath(path, out, outCount))
+        return false;
     return GetFileAttributesW(out) != INVALID_FILE_ATTRIBUTES;
 }
 
