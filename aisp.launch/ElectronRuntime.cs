@@ -1,16 +1,18 @@
 using System.IO.Compression;
+using System.Reflection;
 using System.Text.RegularExpressions;
 
 namespace aisp.launch;
 
-internal static class ElectronRuntime
+internal static partial class ElectronRuntime
 {
     public const string Version = "44.1.1";
 
-    private static readonly Regex ShaLineRegex = new(
-        @"^([0-9a-fA-F]{64})\s+\*?(\S+)$",
-        RegexOptions.Compiled | RegexOptions.CultureInvariant
-    );
+    private const string EmbeddedMainJs = "aisp.electron.app.main.js";
+    private const string EmbeddedPackageJson = "aisp.electron.app.package.json";
+
+    [GeneratedRegex(@"^([0-9a-fA-F]{64})\s+\*?(\S+)$", RegexOptions.CultureInvariant)]
+    private static partial Regex ShaLineRegex();
 
     public static string ElectronExecutablePath =>
         Path.Combine(
@@ -18,7 +20,14 @@ internal static class ElectronRuntime
             RuntimeDataPaths.DetectPlatform().IsWindows ? "electron.exe" : "electron"
         );
 
+    public static string AppDirectory =>
+        Path.Combine(RuntimeDataPaths.ElectronDirectory, "resources", "app");
+
     public static bool IsInstalled() => File.Exists(ElectronExecutablePath);
+
+    public static bool IsAppInstalled() =>
+        File.Exists(Path.Combine(AppDirectory, "main.js"))
+        && File.Exists(Path.Combine(AppDirectory, "package.json"));
 
     public static async Task EnsureInstalledAsync(
         RuntimeHttpClient http,
@@ -27,9 +36,43 @@ internal static class ElectronRuntime
         CancellationToken cancellationToken = default
     )
     {
-        if (IsInstalled())
-            return;
+        if (!IsInstalled())
+            await DownloadAndExtractAsync(http, status, downloadProgress, cancellationToken)
+                .ConfigureAwait(false);
 
+        status?.Report("Installing Electron app…");
+        EnsureAppFiles();
+        status?.Report("Electron ready.");
+    }
+
+    public static void EnsureAppFiles()
+    {
+        if (!IsInstalled())
+        {
+            throw new InvalidOperationException(
+                "Electron runtime is not installed; cannot write the app into resources/app."
+            );
+        }
+
+        var appDir = AppDirectory;
+        Directory.CreateDirectory(appDir);
+
+        WriteEmbeddedResource(EmbeddedMainJs, Path.Combine(appDir, "main.js"));
+        WriteEmbeddedResource(EmbeddedPackageJson, Path.Combine(appDir, "package.json"));
+
+        // Prefer our app folder over Electron's stock default_app.asar.
+        TryDeleteFile(
+            Path.Combine(RuntimeDataPaths.ElectronDirectory, "resources", "default_app.asar")
+        );
+    }
+
+    private static async Task DownloadAndExtractAsync(
+        RuntimeHttpClient http,
+        IProgress<string>? status,
+        IProgress<double>? downloadProgress,
+        CancellationToken cancellationToken
+    )
+    {
         var platform = RuntimeDataPaths.DetectPlatform();
         if (platform.IsLinux && platform.Architecture != "x86_64")
         {
@@ -106,13 +149,28 @@ internal static class ElectronRuntime
                     $"Electron installation incomplete at '{targetDir}'."
                 );
             }
-
-            status?.Report("Electron ready.");
         }
         finally
         {
             TryDeleteDirectory(workRoot);
         }
+    }
+
+    private static void WriteEmbeddedResource(string resourceName, string destinationPath)
+    {
+        var assembly = Assembly.GetExecutingAssembly();
+        using var stream =
+            assembly.GetManifestResourceStream(resourceName)
+            ?? throw new InvalidOperationException(
+                $"Embedded Electron app resource '{resourceName}' was not found."
+            );
+        using var output = new FileStream(
+            destinationPath,
+            FileMode.Create,
+            FileAccess.Write,
+            FileShare.None
+        );
+        stream.CopyTo(output);
     }
 
     private static async Task<string?> TryFetchElectronSha256Async(
@@ -138,7 +196,7 @@ internal static class ElectronRuntime
                         .ConfigureAwait(false)
                 )
                 {
-                    var match = ShaLineRegex.Match(line.Trim());
+                    var match = ShaLineRegex().Match(line.Trim());
                     if (!match.Success)
                         continue;
                     if (match.Groups[2].Value.Equals(zipName, StringComparison.OrdinalIgnoreCase))
@@ -186,7 +244,7 @@ internal static class ElectronRuntime
             var relative = entry.FullName.Replace('\\', '/');
             if (
                 string.IsNullOrEmpty(relative)
-                || relative.StartsWith("/", StringComparison.Ordinal)
+                || relative.StartsWith('/')
                 || relative.Split('/').Contains("..", StringComparer.Ordinal)
             )
             {
@@ -260,6 +318,19 @@ internal static class ElectronRuntime
         catch
         {
             // Best-effort on restricted filesystems.
+        }
+    }
+
+    private static void TryDeleteFile(string path)
+    {
+        try
+        {
+            if (File.Exists(path))
+                File.Delete(path);
+        }
+        catch
+        {
+            // Best-effort; resources/app still takes precedence when present.
         }
     }
 

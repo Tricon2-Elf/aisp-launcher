@@ -278,7 +278,7 @@ internal static class MediaToolsResolver
             var relative = entry.FullName.Replace('\\', '/');
             if (
                 string.IsNullOrEmpty(relative)
-                || relative.StartsWith("/", StringComparison.Ordinal)
+                || relative.StartsWith('/')
                 || relative.Split('/').Contains("..", StringComparer.Ordinal)
             )
             {

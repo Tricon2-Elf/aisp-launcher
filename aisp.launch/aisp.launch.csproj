@@ -56,4 +56,10 @@
       <PrivateAssets>all</PrivateAssets>
     </PackageReference>
   </ItemGroup>
+
+  <!-- Bundled into the launcher so Electron can be seeded after download (works with single-file publish). -->
+  <ItemGroup>
+    <EmbeddedResource Include="..\aisp.electron\app\main.js" LogicalName="aisp.electron.app.main.js" />
+    <EmbeddedResource Include="..\aisp.electron\app\package.json" LogicalName="aisp.electron.app.package.json" />
+  </ItemGroup>
 </Project>
