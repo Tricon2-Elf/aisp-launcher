@@ -208,6 +208,12 @@ HMODULE WINAPI HookLoadLibraryW(LPCWSTR lpLibFileName)
 // aisp.electron\electron.exe over named pipes. On Wine they are a stock native Electron started
 // by aisp.electron/host.js over loopback TCP (Wine named pipes are not a Unix socket a Linux
 // Node can connect to).
+//
+// Help, the event board and CCustomBrowserWindow also CoCreateInstance(CLSID_WebBrowser), so
+// they share this vtable patch, but they are windowed AtlAxWin hosts (ShowWindow into an IF
+// rect) and Navigate to a local file or a server URL that RewriteScreenUrl rejects. Those stay
+// on IEFrame / Wine Gecko WM_PAINT for now. OleDraw is only CWebSiteToTexture (one call in the exe);
+// that is the DIB snapshot Wine leaves black.
 // ---------------------------------------------------------------------------------------------
 
 using CoCreateInstance_t = HRESULT(WINAPI*)(REFCLSID, LPUNKNOWN, DWORD, REFIID, LPVOID*);
@@ -217,6 +223,7 @@ using Navigate2_t = HRESULT(STDMETHODCALLTYPE*)(IWebBrowser2*, VARIANT*, VARIANT
 using OleClose_t = HRESULT(STDMETHODCALLTYPE*)(IOleObject*, DWORD);
 using GetDocument_t = HRESULT(STDMETHODCALLTYPE*)(IWebBrowser2*, IDispatch**);
 using GetReadyState_t = HRESULT(STDMETHODCALLTYPE*)(IWebBrowser2*, READYSTATE*);
+using ShellExecuteW_t = HINSTANCE(WINAPI*)(HWND, LPCWSTR, LPCWSTR, LPCWSTR, LPCWSTR, INT);
 
 CoCreateInstance_t g_originalCoCreateInstance = nullptr;
 OleDraw_t g_originalOleDraw = nullptr;
@@ -225,8 +232,10 @@ Navigate2_t g_originalNavigate2 = nullptr;
 OleClose_t g_originalOleClose = nullptr;
 GetDocument_t g_originalGetDocument = nullptr;
 GetReadyState_t g_originalGetReadyState = nullptr;
+ShellExecuteW_t g_originalShellExecuteW = nullptr;
 bool g_webBrowserPatched = false;
 wchar_t g_screenBase[1024] = {};
+wchar_t g_webOpenUrl[1024] = L"https://aisp.moe/getting-started/";
 
 const GUID kClsidWebBrowser = {0x8856F961, 0x340A, 0x11D0, {0xA9, 0x6B, 0x00, 0xC0, 0x4F, 0xD7, 0x05, 0xA2}};
 const GUID kIidWebBrowser2 = {0xD30C1661, 0xCDAF, 0x11D0, {0x8A, 0x3E, 0x00, 0xC0, 0x4F, 0xC9, 0xE2, 0x6E}};
@@ -294,6 +303,25 @@ bool ReadConnectionValue(char lineNumber, wchar_t* out, size_t outCount)
         line = end ? end + 1 : nullptr;
     }
     return false;
+}
+
+void InitWebOpenUrl()
+{
+    wchar_t configured[1024] = {};
+    if (ConfigString(L"AISP_WEB_OPEN", L"web", L"open", configured, 1024))
+        StringCchCopyW(g_webOpenUrl, 1024, configured);
+    DebugLog(L"aisp.hook: web open: %s\n", g_webOpenUrl);
+}
+
+HINSTANCE WINAPI HookShellExecuteW(HWND hwnd, LPCWSTR operation, LPCWSTR file, LPCWSTR parameters, LPCWSTR directory, INT show)
+{
+    const wchar_t* target = file;
+    if (file && (_wcsnicmp(file, L"http://", 7) == 0 || _wcsnicmp(file, L"https://", 8) == 0) && g_webOpenUrl[0])
+        target = g_webOpenUrl;
+    DebugLog(L"aisp.hook: ShellExecuteW -> %s\n", target ? target : L"");
+    if (!g_originalShellExecuteW)
+        return reinterpret_cast<HINSTANCE>(static_cast<UINT_PTR>(2)); // SE_ERR_FNF
+    return g_originalShellExecuteW(hwnd, operation, target, parameters, directory, show);
 }
 
 void InitScreenBase()
@@ -2203,9 +2231,13 @@ DWORD WINAPI InitHooksThread(LPVOID deferred)
     // linked into it); other modules keep the real functions.
     InitScreenBase();
     AppendInitLog("init: screen base");
+    InitWebOpenUrl();
+    AppendInitLog("init: web open");
     PatchSingleImport(GetModuleHandleW(nullptr), "ole32.dll", "CoCreateInstance", reinterpret_cast<void*>(HookCoCreateInstance), &g_originalCoCreateInstance);
     PatchSingleImport(GetModuleHandleW(nullptr), "ole32.dll", "OleDraw", reinterpret_cast<void*>(HookOleDraw), &g_originalOleDraw);
     AppendInitLog("init: ole32 patched");
+    PatchSingleImport(GetModuleHandleW(nullptr), "SHELL32.dll", "ShellExecuteW", reinterpret_cast<void*>(HookShellExecuteW), &g_originalShellExecuteW);
+    AppendInitLog("init: shell32 patched");
     PatchTvCommentButton();
     AppendInitLog("init: tv button");
     PatchNicoliveReloadNotify();
