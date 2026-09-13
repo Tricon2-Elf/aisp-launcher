@@ -14,7 +14,9 @@ internal static class RuntimeDependencyBootstrap
     {
         try
         {
-            return !ElectronRuntime.IsInstalled() || MediaToolsResolver.TryFindExisting() is null;
+            return !ElectronRuntime.IsInstalled()
+                || MediaToolsResolver.TryFindExisting() is null
+                || MediaToolsResolver.TryFindYtdlp() is null;
         }
         catch (PlatformNotSupportedException)
         {

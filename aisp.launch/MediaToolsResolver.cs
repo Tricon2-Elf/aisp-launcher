@@ -13,6 +13,8 @@ internal static class MediaToolsResolver
         "https://api.github.com/repos/streamlink/windows-builds/releases/latest";
     private const string LinuxReleaseApi =
         "https://api.github.com/repos/streamlink/streamlink-appimage/releases/latest";
+    private const string YtdlpReleaseApi =
+        "https://api.github.com/repos/yt-dlp/yt-dlp/releases/latest";
 
     private static readonly Regex Sha256DigestRegex = new(
         @"^sha256:([0-9a-fA-F]{64})$",
@@ -41,6 +43,10 @@ internal static class MediaToolsResolver
             if (!Directory.Exists(root))
                 return null;
 
+            var cached = CachedYtdlpPath();
+            if (File.Exists(cached))
+                return cached;
+
             if (platform.IsWindows)
             {
                 return FindWindowsExecutable(root, "yt-dlp.exe", "")
@@ -65,7 +71,11 @@ internal static class MediaToolsResolver
     {
         var existing = TryFindExisting();
         if (existing is not null)
+        {
+            await EnsureYtdlpAsync(http, status, downloadProgress, cancellationToken)
+                .ConfigureAwait(false);
             return existing.Value;
+        }
 
         var platform = RuntimeDataPaths.DetectPlatform();
         status?.Report($"Downloading Streamlink + FFmpeg for {platform.CacheKey}…");
@@ -165,12 +175,120 @@ internal static class MediaToolsResolver
                 );
 
             status?.Report("Streamlink + FFmpeg ready.");
+            downloadProgress?.Report(0);
+            await EnsureYtdlpAsync(http, status, downloadProgress, cancellationToken)
+                .ConfigureAwait(false);
             return installed;
         }
         finally
         {
             TryDeleteDirectory(workRoot);
         }
+    }
+
+    public static async Task EnsureYtdlpAsync(
+        RuntimeHttpClient http,
+        IProgress<string>? status = null,
+        IProgress<double>? downloadProgress = null,
+        CancellationToken cancellationToken = default
+    )
+    {
+        if (TryFindYtdlp() is not null)
+            return;
+
+        var platform = RuntimeDataPaths.DetectPlatform();
+        status?.Report($"Downloading yt-dlp for {platform.CacheKey}…");
+
+        var release = await http.GetReleaseAsync(YtdlpReleaseApi, cancellationToken)
+            .ConfigureAwait(false);
+        var asset = SelectYtdlpAsset(release, platform);
+
+        var workRoot = Path.Combine(
+            RuntimeDataPaths.DataRoot,
+            ".download-ytdlp-" + Guid.NewGuid().ToString("N")
+        );
+        var archivePath = Path.Combine(workRoot, asset.Name);
+
+        try
+        {
+            Directory.CreateDirectory(workRoot);
+            await http.DownloadToFileAsync(asset.Url, archivePath, downloadProgress, cancellationToken)
+                .ConfigureAwait(false);
+
+            status?.Report("Verifying yt-dlp…");
+            var actual = await RuntimeHttpClient
+                .ComputeSha256Async(archivePath, cancellationToken)
+                .ConfigureAwait(false);
+            if (!actual.Equals(asset.Sha256, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException(
+                    $"SHA256 mismatch for {asset.Name}. Expected {asset.Sha256}, got {actual}."
+                );
+            }
+
+            var target = CachedYtdlpPath();
+            Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+            File.Copy(archivePath, target, overwrite: true);
+            TryMakeExecutable(target);
+
+            if (TryFindYtdlp() is null)
+                throw new InvalidOperationException("yt-dlp installation is incomplete.");
+
+            status?.Report("yt-dlp ready.");
+        }
+        finally
+        {
+            TryDeleteDirectory(workRoot);
+        }
+    }
+
+    private static string CachedYtdlpPath()
+    {
+        var platform = RuntimeDataPaths.DetectPlatform();
+        var name = platform.IsWindows ? "yt-dlp.exe" : "yt-dlp";
+        return Path.Combine(RuntimeDataPaths.MediaPlatformDirectory, name);
+    }
+
+    private static BundleAsset SelectYtdlpAsset(
+        GitHubApiReleaseDocument release,
+        RuntimePlatform platform
+    )
+    {
+        var wanted = platform.IsWindows
+            ? "yt-dlp.exe"
+            : platform.Architecture == "aarch64"
+                ? "yt-dlp_linux_aarch64"
+                : "yt-dlp_linux";
+
+        var asset =
+            release.Assets.FirstOrDefault(candidate =>
+                candidate.Name.Equals(wanted, StringComparison.Ordinal)
+            )
+            ?? throw new InvalidOperationException(
+                $"yt-dlp release {release.TagName} has no {wanted} asset."
+            );
+
+        if (
+            string.IsNullOrWhiteSpace(asset.BrowserDownloadUrl)
+            || !asset.BrowserDownloadUrl.StartsWith(
+                "https://github.com/yt-dlp/",
+                StringComparison.Ordinal
+            )
+            || asset.Size <= 0
+            || asset.Digest is null
+            || Sha256DigestRegex.Match(asset.Digest) is not { Success: true } digestMatch
+        )
+        {
+            throw new InvalidOperationException("Selected yt-dlp release asset is invalid.");
+        }
+
+        return new BundleAsset(
+            asset.Name,
+            asset.BrowserDownloadUrl,
+            asset.Size,
+            release.TagName,
+            digestMatch.Groups[1].Value.ToLowerInvariant()
+        );
     }
 
     private static string? FindCachedStreamlink()
