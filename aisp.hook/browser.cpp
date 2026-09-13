@@ -66,10 +66,18 @@ void SetElectronTitle(ScreenStream* stream, const wchar_t* title)
     }
 }
 
-// aisp.electron\electron.exe ([tools] electron) with the app folder beside it.
+// aisp.launch.data\electron\electron.exe ([tools] electron), with the app at resources\app
+// (launcher bootstrap) or a sibling app\ (Wine / install-electron-runtime.sh).
 bool ResolveElectronPaths(wchar_t* browser, size_t browserCount, wchar_t* appPath, size_t appCount, wchar_t* error, size_t errorCount)
 {
-    if (!ToolPath(L"AISP_ELECTRON", L"electron", L"aisp.electron\\electron.exe", browser, browserCount))
+    if (!ToolPath(
+            L"AISP_ELECTRON",
+            L"electron",
+            kElectronFallback,
+            kElectronFallbackLegacy,
+            browser,
+            browserCount
+        ))
     {
         if (error)
             StringCchPrintfW(error, errorCount, L"browser host not found: %s", browser);
@@ -84,14 +92,19 @@ bool ResolveElectronPaths(wchar_t* browser, size_t browserCount, wchar_t* appPat
         return false;
     }
     slash[1] = 0;
+    wchar_t dir[MAX_PATH] = {};
+    StringCchCopyW(dir, MAX_PATH, appPath);
+    StringCchCopyW(appPath, appCount, dir);
+    StringCchCatW(appPath, appCount, L"resources\\app");
+    if (GetFileAttributesW(appPath) != INVALID_FILE_ATTRIBUTES)
+        return true;
+    StringCchCopyW(appPath, appCount, dir);
     StringCchCatW(appPath, appCount, L"app");
-    if (GetFileAttributesW(appPath) == INVALID_FILE_ATTRIBUTES)
-    {
-        if (error)
-            StringCchPrintfW(error, errorCount, L"browser app not found: %s", appPath);
-        return false;
-    }
-    return true;
+    if (GetFileAttributesW(appPath) != INVALID_FILE_ATTRIBUTES)
+        return true;
+    if (error)
+        StringCchPrintfW(error, errorCount, L"browser app not found: %sresources\\app", dir);
+    return false;
 }
 } // namespace
 
@@ -445,7 +458,7 @@ bool EnsureHub(wchar_t* error, size_t errorCount)
                 DWORD code = 0;
                 GetExitCodeProcess(process, &code);
                 if (error)
-                    StringCchPrintfW(error, errorCount, L"browser host exited (code %lu) before connecting its hub channel: aisp.electron\\app\\main.js must be the one that came with this aisp.hook.dll", static_cast<unsigned long>(code));
+                    StringCchPrintfW(error, errorCount, L"browser host exited (code %lu) before connecting its hub channel: the Electron app (resources\\app or app) must be the one that came with this aisp.hook.dll", static_cast<unsigned long>(code));
                 break;
             }
         }
@@ -1064,8 +1077,8 @@ bool ReadFramedChannel(HANDLE video, volatile LONG* stop, DWORD frameBytes, cons
             if (!hello || protocol != kProtocol)
             {
                 char line[400] = {};
-                StringCchPrintfA(line, 400, hello ? "%s: the aisp.electron app speaks another protocol than this aisp.hook.dll; install the aisp.electron\\app\\main.js that came with the DLL\r\n"
-                                                  : "%s: the aisp.electron app sent no hello, it is a stale copy writing bare frames; install the aisp.electron\\app\\main.js that came with this aisp.hook.dll\r\n", tag);
+                StringCchPrintfA(line, 400, hello ? "%s: the Electron app speaks another protocol than this aisp.hook.dll; install the resources\\app (or app) main.js that came with the DLL\r\n"
+                                                  : "%s: the Electron app sent no hello, it is a stale copy writing bare frames; install the resources\\app (or app) main.js that came with this aisp.hook.dll\r\n", tag);
                 LogLine(line);
                 break;
             }

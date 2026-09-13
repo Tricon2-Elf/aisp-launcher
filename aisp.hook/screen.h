@@ -275,9 +275,31 @@ void AppendInitLog(const char* text);
 // The line the screen shows while a source has nothing to draw yet (or failed).
 void SetStatus(ScreenStream* stream, const wchar_t* text);
 
-// Child processes: resolved from [tools] in aisp.hook.ini, an environment variable, or the game
-// directory; attached to the job so they die with the game, stderr to the log.
+// Child processes: resolved from [tools] in aisp.hook.ini, an environment variable of the same
+// meaning, then these paths under aisp.launch.data next to the game (the layout the launcher
+// downloads into). Legacy folders beside the game still work when the new ones are missing.
+// Attached to the job so they die with the game; stderr goes to the log.
+inline constexpr wchar_t kFfmpegFallback[] =
+    L"aisp.launch.data\\media\\windows-x86_64\\ffmpeg\\ffmpeg.exe";
+inline constexpr wchar_t kFfmpegFallbackLegacy[] = L"streamlink\\ffmpeg\\ffmpeg.exe";
+inline constexpr wchar_t kStreamlinkFallback[] =
+    L"aisp.launch.data\\media\\windows-x86_64\\bin\\streamlink.exe";
+inline constexpr wchar_t kStreamlinkFallbackLegacy[] = L"streamlink\\bin\\streamlink.exe";
+inline constexpr wchar_t kYtdlpFallback[] =
+    L"aisp.launch.data\\media\\windows-x86_64\\yt-dlp.exe";
+inline constexpr wchar_t kYtdlpFallbackLegacy[] = L"yt-dlp\\yt-dlp.exe";
+inline constexpr wchar_t kElectronFallback[] = L"aisp.launch.data\\electron\\electron.exe";
+inline constexpr wchar_t kElectronFallbackLegacy[] = L"aisp.electron\\electron.exe";
+
 bool ToolPath(const wchar_t* variable, const wchar_t* key, const wchar_t* fallback, wchar_t* out, size_t outCount);
+bool ToolPath(
+    const wchar_t* variable,
+    const wchar_t* key,
+    const wchar_t* fallback,
+    const wchar_t* altFallback,
+    wchar_t* out,
+    size_t outCount
+);
 HANDLE LaunchTool(wchar_t* commandLine, HANDLE stdIn, HANDLE stdOut);
 // Electron/Node under Wine crash if stdout is a Wine file or pipe (uv_pipe_open EINVAL), so the
 // browser host starts with NUL stdio, hidden, in the job.

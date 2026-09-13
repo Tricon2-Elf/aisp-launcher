@@ -52,4 +52,40 @@ internal static class RuntimeDependencyBootstrap
         status?.Report("Runtime dependencies ready.");
         return result;
     }
+
+    /// <summary>
+    /// Sets AISP_* tool variables on this process so a CreateProcess-injected game inherits
+    /// absolute paths into aisp.launch.data.
+    /// </summary>
+    public static void ApplyHookEnvironment()
+    {
+        try
+        {
+            if (File.Exists(ElectronRuntime.ElectronExecutablePath))
+            {
+                Environment.SetEnvironmentVariable(
+                    "AISP_ELECTRON",
+                    Path.GetFullPath(ElectronRuntime.ElectronExecutablePath)
+                );
+            }
+
+            var media = Current?.MediaTools ?? MediaToolsResolver.TryFindExisting();
+            if (media is { } tools)
+            {
+                Environment.SetEnvironmentVariable(
+                    "AISP_STREAMLINK",
+                    Path.GetFullPath(tools.Streamlink)
+                );
+                Environment.SetEnvironmentVariable("AISP_FFMPEG", Path.GetFullPath(tools.Ffmpeg));
+            }
+
+            var ytdlp = MediaToolsResolver.TryFindYtdlp();
+            if (ytdlp is not null)
+                Environment.SetEnvironmentVariable("AISP_YTDLP", Path.GetFullPath(ytdlp));
+        }
+        catch (PlatformNotSupportedException)
+        {
+            // Hook injection is Windows-only; nothing to export.
+        }
+    }
 }

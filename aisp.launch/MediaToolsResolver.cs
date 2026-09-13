@@ -28,6 +28,34 @@ internal static class MediaToolsResolver
         return new MediaTools(streamlink, ffmpeg);
     }
 
+    public static string? TryFindYtdlp()
+    {
+        try
+        {
+            var fromPath = FindOnPath("yt-dlp") ?? FindOnPath("ytdlp");
+            if (fromPath is not null)
+                return fromPath;
+
+            var platform = RuntimeDataPaths.DetectPlatform();
+            var root = RuntimeDataPaths.MediaPlatformDirectory;
+            if (!Directory.Exists(root))
+                return null;
+
+            if (platform.IsWindows)
+            {
+                return FindWindowsExecutable(root, "yt-dlp.exe", "")
+                    ?? FindWindowsExecutable(root, "ytdlp.exe", "");
+            }
+
+            var unix = Path.Combine(root, "yt-dlp");
+            return File.Exists(unix) ? unix : null;
+        }
+        catch (PlatformNotSupportedException)
+        {
+            return null;
+        }
+    }
+
     public static async Task<MediaTools> EnsureInstalledAsync(
         RuntimeHttpClient http,
         IProgress<string>? status = null,

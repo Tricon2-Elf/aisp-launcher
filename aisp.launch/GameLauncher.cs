@@ -48,6 +48,7 @@ public sealed class GameLauncher(LauncherSettings settings)
                     );
                 }
 
+                RuntimeDependencyBootstrap.ApplyHookEnvironment();
                 var injected = WindowsLocaleInjector.TryLaunchWithHook(
                     executable,
                     gameArgs,

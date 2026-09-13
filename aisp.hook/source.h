@@ -31,7 +31,7 @@ DWORD RunFfmpegSource(ScreenStream* stream);
 // tone; the vod follows the page's shared timeline.
 DWORD RunPatternSource(ScreenStream* stream);
 // source_electron.cpp: electron:<http(s) url> in a separate off-screen Electron process
-// (aisp.electron\electron.exe, stock Chromium). crop:sw/sh is the browser's layout viewport
+// (aisp.launch.data\electron\electron.exe, stock Chromium). crop:sw/sh is the browser's layout viewport
 // (otherwise the video box); the box-sized window at cx,cy of that is what we overlay.
 // scrollx/scrolly pan the document; scale= zooms Chromium.
 DWORD RunElectronSource(ScreenStream* stream);

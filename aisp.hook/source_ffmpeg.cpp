@@ -9,11 +9,11 @@
 // stay short. Which site an id belongs to is the server's business: it hands the page the
 // final URL.
 //
-// Tools: a streamlink install in the game directory (streamlink\bin\streamlink.exe and its
-// bundled streamlink\ffmpeg\ffmpeg.exe) and yt-dlp\yt-dlp.exe there; [tools] in aisp.hook.ini (or
-// AISP_STREAMLINK, AISP_YTDLP and AISP_FFMPEG) overrides the paths. What yt-dlp resolves for a
-// video (its media URLs and duration) is cached under aisp.cache\yt-dlp (ytdlp.cpp), so a
-// video's loops and later starts do not wait on it.
+// Tools: Streamlink and FFmpeg under aisp.launch.data\media\windows-x86_64 (the layout the
+// launcher downloads), with the older streamlink\ and yt-dlp\ folders next to the game still
+// accepted; [tools] in aisp.hook.ini (or AISP_STREAMLINK, AISP_YTDLP and AISP_FFMPEG) overrides
+// the paths. What yt-dlp resolves for a video (its media URLs and duration) is cached under
+// aisp.cache\yt-dlp (ytdlp.cpp), so a video's loops and later starts do not wait on it.
 #include "source.h"
 #include "config.h"
 #include "ytdlp.h"
@@ -155,7 +155,7 @@ bool RunFfmpegOnce(ScreenStream* stream, LONGLONG* frames)
     wchar_t command[4096] = {};
     wchar_t message[512] = {};
 
-    if (!ToolPath(L"AISP_FFMPEG", L"ffmpeg", L"streamlink\\ffmpeg\\ffmpeg.exe", ffmpeg, MAX_PATH))
+    if (!ToolPath(L"AISP_FFMPEG", L"ffmpeg", kFfmpegFallback, kFfmpegFallbackLegacy, ffmpeg, MAX_PATH))
     {
         StringCchPrintfW(message, 512, L"ffmpeg not found: %s", ffmpeg);
         SetStatus(stream, message);
@@ -174,7 +174,7 @@ bool RunFfmpegOnce(ScreenStream* stream, LONGLONG* frames)
     if (viaStreamlink)
     {
         const wchar_t* pageUrl = stream->source + 11;
-        if (ToolPath(L"AISP_STREAMLINK", L"streamlink", L"streamlink\\bin\\streamlink.exe", streamlink, MAX_PATH))
+        if (ToolPath(L"AISP_STREAMLINK", L"streamlink", kStreamlinkFallback, kStreamlinkFallbackLegacy, streamlink, MAX_PATH))
         {
             StringCchPrintfW(message, 512, L"streamlink: %s", pageUrl);
             SetStatus(stream, message);
@@ -206,7 +206,7 @@ bool RunFfmpegOnce(ScreenStream* stream, LONGLONG* frames)
             ffmpegInput = readEnd;
             StringCchCopyW(input, 2048, L"pipe:0");
         }
-        else if (ToolPath(L"AISP_YTDLP", L"ytdlp", L"yt-dlp\\yt-dlp.exe", ytdlp, MAX_PATH))
+        else if (ToolPath(L"AISP_YTDLP", L"ytdlp", kYtdlpFallback, kYtdlpFallbackLegacy, ytdlp, MAX_PATH))
         {
             StringCchPrintfW(message, 512, L"yt-dlp: resolving %s", pageUrl);
             SetStatus(stream, message);

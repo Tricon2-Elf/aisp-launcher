@@ -168,7 +168,7 @@ void WriteCache(const wchar_t* pageUrl, const YtdlpInfo& info)
 bool RunYtdlp(const wchar_t* pageUrl, YtdlpInfo& info, wchar_t* error, size_t errorCount)
 {
     wchar_t ytdlp[MAX_PATH] = {};
-    if (!ToolPath(L"AISP_YTDLP", L"ytdlp", L"yt-dlp\\yt-dlp.exe", ytdlp, MAX_PATH))
+    if (!ToolPath(L"AISP_YTDLP", L"ytdlp", kYtdlpFallback, kYtdlpFallbackLegacy, ytdlp, MAX_PATH))
     {
         StringCchPrintfW(error, errorCount, L"yt-dlp not found: %s", ytdlp);
         return false;

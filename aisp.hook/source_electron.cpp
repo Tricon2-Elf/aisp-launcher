@@ -1,5 +1,5 @@
 // Off-screen browser source: electron:<http(s) url>, a window in the game's shared Electron
-// (browser.cpp, StartElectronSession). On Windows that is aisp.electron\electron.exe over named
+// (browser.cpp, StartElectronSession). On Windows that is aisp.launch.data\electron\electron.exe over named
 // pipes. On Wine the hook listens on loopback TCP and aisp.electron/host.js starts a stock
 // native Electron with the same app — Wine named pipes are not a Unix socket a Linux Node can
 // connect to. Paint is latest-frame BGRA on the framed channel, which also carries the
@@ -14,8 +14,8 @@
 
 namespace aisp
 {
-// aisp.electron\electron.exe next to the game ([tools] electron or AISP_ELECTRON overrides), with the app folder
-// beside it.
+// aisp.launch.data\electron\electron.exe next to the game ([tools] electron or AISP_ELECTRON overrides), with the app at
+// resources\app (or a sibling app\ folder).
 // A root-relative URL (a page or script of the emulator's own, such as the YouTube embed
 // page) is taken at the origin the screen page came from, so the server need not know its
 // public address; an absolute one is kept. False when it is neither.

@@ -106,21 +106,49 @@ void SetStatus(ScreenStream* stream, const wchar_t* text)
     DebugLog(L"aisp.hook: screen: %s\n", text);
 }
 
-// The tool path from the environment variable or [tools] key, else `fallback`; a relative
-// path is taken from the game directory.
-bool ToolPath(const wchar_t* variable, const wchar_t* key, const wchar_t* fallback, wchar_t* out, size_t outCount)
+// The tool path from the environment variable or [tools] key, else `fallback` (then
+// `altFallback`); a relative path is taken from the game directory.
+namespace
 {
-    wchar_t configured[MAX_PATH] = {};
-    const wchar_t* path = ConfigString(variable, L"tools", key, configured, MAX_PATH) ? configured : fallback;
+bool FillToolPath(const wchar_t* path, wchar_t* out, size_t outCount)
+{
+    if (!path || !path[0])
+        return false;
     const bool absolute = path[0] == L'\\' || path[0] == L'/' || (path[0] && path[1] == L':');
     if (absolute)
+        return SUCCEEDED(StringCchCopyW(out, outCount, path));
+    return BuildGameFilePath(path, out, outCount);
+}
+} // namespace
+
+bool ToolPath(const wchar_t* variable, const wchar_t* key, const wchar_t* fallback, wchar_t* out, size_t outCount)
+{
+    return ToolPath(variable, key, fallback, nullptr, out, outCount);
+}
+
+bool ToolPath(
+    const wchar_t* variable,
+    const wchar_t* key,
+    const wchar_t* fallback,
+    const wchar_t* altFallback,
+    wchar_t* out,
+    size_t outCount
+)
+{
+    wchar_t configured[MAX_PATH] = {};
+    if (ConfigString(variable, L"tools", key, configured, MAX_PATH))
     {
-        if (FAILED(StringCchCopyW(out, outCount, path)))
+        if (!FillToolPath(configured, out, outCount))
             return false;
+        return GetFileAttributesW(out) != INVALID_FILE_ATTRIBUTES;
     }
-    else if (!BuildGameFilePath(path, out, outCount))
-        return false;
-    return GetFileAttributesW(out) != INVALID_FILE_ATTRIBUTES;
+    if (FillToolPath(fallback, out, outCount) && GetFileAttributesW(out) != INVALID_FILE_ATTRIBUTES)
+        return true;
+    if (FillToolPath(altFallback, out, outCount) && GetFileAttributesW(out) != INVALID_FILE_ATTRIBUTES)
+        return true;
+    if (!FillToolPath(fallback, out, outCount))
+        FillToolPath(altFallback, out, outCount);
+    return false;
 }
 
 // Starts a child with the given standard handles (nullptr = the log file / nothing) and puts it
