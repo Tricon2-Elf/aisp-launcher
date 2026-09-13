@@ -176,6 +176,7 @@ HMODULE WINAPI HookLoadLibraryW(LPCWSTR lpLibFileName)
 //   http://aisp.jp/player/jdfoiajwpefha/nicoplayer.php?movieid=<id>       a TV given a movie id
 //   http://aisp.jp/player/jdfoiajwpefha/nicoplayer.php?tvid=<n>&chid=<n>  a channel screen
 //   http://live.nicovideo.jp/watch/<id>?npwarn=false#player               the live billboard
+//   http://127.0.0.1/p?tvid=<n>&chid=<n>                                 some private builds' stub player
 // Neither host serves the game any more, so Navigate is patched to send them to the emulator,
 // keeping the distinction:
 //   <base>room-tv?movieid=<id>         <base>channel-screen?tvid=<n>&chid=<n>
@@ -250,8 +251,39 @@ const GUID kIidSimpleAudioVolume = {0x87CE5498, 0x68D6, 0x44E5, {0x92, 0x15, 0x6
 ISimpleAudioVolume* g_gameVolumes[8] = {};
 int g_gameVolumeCount = 0;
 
-constexpr wchar_t kTvHost[] = L"http://aisp.jp";
-constexpr wchar_t kLiveHost[] = L"http://live.nicovideo.jp/watch/";
+const wchar_t* AfterHttpScheme(const wchar_t* url)
+{
+    if (!url)
+        return nullptr;
+    if (_wcsnicmp(url, L"https://", 8) == 0)
+        return url + 8;
+    if (_wcsnicmp(url, L"http://", 7) == 0)
+        return url + 7;
+    return nullptr;
+}
+
+bool UrlHostIs(const wchar_t* url, const wchar_t* host)
+{
+    const wchar_t* p = AfterHttpScheme(url);
+    if (!p)
+        return false;
+    const size_t n = std::wcslen(host);
+    if (_wcsnicmp(p, host, n) != 0)
+        return false;
+    const wchar_t c = p[n];
+    return c == L'\0' || c == L'/' || c == L'?' || c == L'#' || c == L':';
+}
+
+void CopyQueryNoFragment(const wchar_t* url, wchar_t* out, size_t outCount)
+{
+    out[0] = L'\0';
+    const wchar_t* query = url ? std::wcschr(url, L'?') : nullptr;
+    if (!query)
+        return;
+    StringCchCopyW(out, outCount, query + 1);
+    if (wchar_t* hash = std::wcschr(out, L'#'))
+        *hash = L'\0';
+}
 
 bool ReadConnectionValue(char lineNumber, wchar_t* out, size_t outCount)
 {
@@ -399,28 +431,33 @@ void AppendClientContext(wchar_t* url, size_t count)
 // Returns a new BSTR with the emulator URL for a screen URL, or nullptr for anything else.
 BSTR RewriteScreenUrl(const wchar_t* url)
 {
-    if (!url || !g_screenBase[0])
+    if (!url || _wcsnicmp(url, L"javascript:", 11) == 0 || !g_screenBase[0])
         return nullptr;
 
     wchar_t rewritten[4096] = {};
     StringCchCopyW(rewritten, 4096, g_screenBase);
+    wchar_t query[2048] = {};
+    CopyQueryNoFragment(url, query, 2048);
 
-    const size_t tvHostLength = std::wcslen(kTvHost);
-    const size_t liveHostLength = std::wcslen(kLiveHost);
-    if (_wcsnicmp(url, kTvHost, tvHostLength) == 0 && (url[tvHostLength] == L'/' || url[tvHostLength] == L'?' || url[tvHostLength] == L'#' || url[tvHostLength] == L'\0'))
+    const wchar_t* livePath = nullptr;
+    if (const wchar_t* host = AfterHttpScheme(url))
     {
-        const wchar_t* query = std::wcschr(url, L'?');
-        const wchar_t* fragment = std::wcschr(url, L'#');
-        const wchar_t* tail = query ? query + 1 : (fragment ? fragment : L"");
-        if (query && std::wcsstr(tail, L"movieid="))
+        constexpr wchar_t kLive[] = L"live.nicovideo.jp/watch/";
+        if (_wcsnicmp(host, kLive, std::wcslen(kLive)) == 0)
+            livePath = host + std::wcslen(kLive);
+    }
+
+    if (UrlHostIs(url, L"aisp.jp"))
+    {
+        if (query[0] && std::wcsstr(query, L"movieid="))
         {
             AppendW(rewritten, 4096, L"room-tv?");
-            AppendW(rewritten, 4096, tail);
+            AppendW(rewritten, 4096, query);
         }
-        else if (query && std::wcsstr(tail, L"tvid="))
+        else if (query[0] && std::wcsstr(query, L"tvid="))
         {
             AppendW(rewritten, 4096, L"channel-screen?");
-            AppendW(rewritten, 4096, tail);
+            AppendW(rewritten, 4096, query);
         }
         else
         {
@@ -428,26 +465,30 @@ BSTR RewriteScreenUrl(const wchar_t* url)
             AppendPercentEncoded(rewritten, 4096, url);
         }
     }
-    else if (_wcsnicmp(url, kLiveHost, liveHostLength) == 0)
+    else if (livePath)
     {
-        const wchar_t* id = url + liveHostLength;
         size_t idLength = 0;
-        while (id[idLength] && id[idLength] != L'?' && id[idLength] != L'#' && id[idLength] != L'/')
+        while (livePath[idLength] && livePath[idLength] != L'?' && livePath[idLength] != L'#' && livePath[idLength] != L'/')
             ++idLength;
         AppendW(rewritten, 4096, L"live-watch?liveid=");
         wchar_t idCopy[256] = {};
-        StringCchCopyNW(idCopy, 256, id, idLength);
+        StringCchCopyNW(idCopy, 256, livePath, idLength);
         AppendPercentEncoded(rewritten, 4096, idCopy);
-        const wchar_t* rest = id + idLength;
-        if (*rest == L'?')
+        if (query[0])
         {
             AppendW(rewritten, 4096, L"&");
-            AppendW(rewritten, 4096, rest + 1);
+            AppendW(rewritten, 4096, query);
         }
-        else if (*rest)
-        {
-            AppendW(rewritten, 4096, rest);
-        }
+    }
+    else if (query[0] && std::wcsstr(query, L"movieid="))
+    {
+        AppendW(rewritten, 4096, L"room-tv?");
+        AppendW(rewritten, 4096, query);
+    }
+    else if (query[0] && std::wcsstr(query, L"tvid="))
+    {
+        AppendW(rewritten, 4096, L"channel-screen?");
+        AppendW(rewritten, 4096, query);
     }
     else
     {
@@ -547,7 +588,7 @@ void InitScreenVideo()
     if (g_screenVideoInitialised)
         return;
     g_screenVideoInitialised = true;
-    InitializeCriticalSection(&g_streamsLock);
+    InitStreamLock();
     g_watchdog = CreateThread(nullptr, 0, WatchdogThread, nullptr, 0, nullptr);
 
     g_job = CreateJobObjectW(nullptr, nullptr);
@@ -1980,6 +2021,8 @@ HRESULT STDMETHODCALLTYPE HookNavigate2(IWebBrowser2* self, VARIANT* url, VARIAN
 // The screen a WebBrowser belongs to, by identity, or nullptr.
 ScreenStream* StreamOfBrowser(IWebBrowser2* self)
 {
+    if (!g_streamsLockReady)
+        return nullptr;
     IUnknown* identity = IdentityOf(reinterpret_cast<IUnknown*>(self));
     if (!identity)
         return nullptr;
@@ -2199,6 +2242,10 @@ DWORD WINAPI InitHooksThread(LPVOID deferred)
     AppendInitLog("init: start");
     InitBrowserMode();
     AppendInitLog("init: browser mode");
+    // get_Document / get_ReadyState take this lock as soon as a WebBrowser exists, which is
+    // before the first Navigate. The watchdog thread still waits for InitScreenVideo.
+    InitStreamLock();
+    AppendInitLog("init: stream lock");
     // The screen hooks only concern the game executable's own imports (the ATL host is
     // linked into it); other modules keep the real functions.
     InitScreenBase();

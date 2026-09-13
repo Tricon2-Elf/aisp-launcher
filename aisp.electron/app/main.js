@@ -113,11 +113,15 @@ app.commandLine.appendSwitch("autoplay-policy", "no-user-gesture-required");
 app.commandLine.appendSwitch("force-device-scale-factor", "1");
 app.commandLine.appendSwitch("disable-logging");
 app.commandLine.appendSwitch("log-level", "3");
+// A hardware GPU process next to the 32-bit D3D9 client takes the game down when the
+// first in-game screen starts. Software blit is enough for the off-screen crop.
+app.disableHardwareAcceleration();
+app.commandLine.appendSwitch("disable-gpu");
+app.commandLine.appendSwitch("disable-gpu-compositing");
 if (wine || process.platform !== "win32") {
   // Wine-in-process Chromium dies; native Linux on Xvfb has no usable GPU process.
-  // Off-screen paint is software either way. --no-sandbox must also be on the argv
-  // (host.js) because the SUID helper check runs before this file.
-  app.disableHardwareAcceleration();
+  // --no-sandbox must also be on the argv (host.js) because the SUID helper check
+  // runs before this file.
   app.commandLine.appendSwitch("no-sandbox");
   app.commandLine.appendSwitch("disable-gpu-sandbox");
   app.commandLine.appendSwitch("disable-dev-shm-usage");

@@ -15,8 +15,17 @@ CRITICAL_SECTION g_streamsLock;
 HANDLE g_job = nullptr;
 HANDLE g_toolLog = INVALID_HANDLE_VALUE;
 bool g_screenVideoInitialised = false;
+bool g_streamsLockReady = false;
 HANDLE g_watchdog = nullptr;
 bool g_logStats = false;                 // AISP_SCREEN_STATS=1: the per-second queue line in aisp.screen.log
+
+void InitStreamLock()
+{
+    if (g_streamsLockReady)
+        return;
+    InitializeCriticalSection(&g_streamsLock);
+    g_streamsLockReady = true;
+}
 
 void DebugLog(const wchar_t* format, const wchar_t* arg)
 {

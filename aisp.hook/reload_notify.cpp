@@ -121,6 +121,8 @@ bool ReloadScreenPage(ScreenStream* stream)
 // the walk, and a reload is one line on a channel or one COM call.
 void __cdecl OnNicoliveReloadNotify(const char* liveId)
 {
+    if (!g_streamsLockReady)
+        return;
     const ReloadScope scope = ScopeOf(liveId);
     const int channelFilter = scope.channelFilter;
     int matched = 0, reloaded = 0, stopped = 0;

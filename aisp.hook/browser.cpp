@@ -432,7 +432,15 @@ bool EnsureHub(wchar_t* error, size_t errorCount)
             return false;
         }
         wchar_t command[1024] = {};
-        StringCchPrintfW(command, 1024, L"\"%s\" \"%s\" --hub=\"%s\"", browser, appPath, hubSpec);
+        // Chromium switches must come before the app path or Electron treats them as argv for main.js.
+        StringCchPrintfW(
+            command,
+            1024,
+            L"\"%s\" --disable-gpu --disable-gpu-compositing --disable-gpu-sandbox \"%s\" --hub=\"%s\"",
+            browser,
+            appPath,
+            hubSpec
+        );
         HANDLE process = LaunchBrowserHost(command);
         if (!process)
         {

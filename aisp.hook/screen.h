@@ -261,8 +261,10 @@ extern HANDLE g_toolLog;
 // there too). Invalid when the game directory cannot be written.
 HANDLE OpenScreenLog();
 extern bool g_screenVideoInitialised;
+extern bool g_streamsLockReady;
 extern HANDLE g_watchdog;
 extern bool g_logStats;
+void InitStreamLock();
 
 // aisp.screen.log next to the game executable (opened by InitScreenVideo); tool stderr goes there too.
 void LogLine(const char* text);
