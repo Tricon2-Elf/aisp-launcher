@@ -37,26 +37,26 @@ public sealed class LauncherSettings
             [nameof(GameEnvironment.Stable)] = new()
             {
                 AuthHost = "aisp.moe",
-                DownloadHost = "aisp.moe",
+                DownloadHost = "game.aisp.moe",
                 DownloadPath = "ai-sp/download.php",
-                UploadHost = "aisp.moe",
+                UploadHost = "game.aisp.moe",
                 UploadPath = "ai-sp/upload.php",
             },
             [nameof(GameEnvironment.Dev)] = new()
             {
-                AuthHost = "aisp.moe",
-                DownloadHost = "aisp.moe",
-                DownloadPath = "ai-sp/dev/download.php",
-                UploadHost = "aisp.moe",
-                UploadPath = "ai-sp/dev/upload.php",
+                AuthHost = "game.aisp.moe",
+                DownloadHost = "game.aisp.moe",
+                DownloadPath = "ai-sp/download.php",
+                UploadHost = "game.aisp.moe",
+                UploadPath = "ai-sp/upload.php",
             },
             [nameof(GameEnvironment.Local)] = new()
             {
                 AuthHost = "127.0.0.1",
                 DownloadHost = "127.0.0.1",
-                DownloadPath = "ai-sp/dev/download.php",
+                DownloadPath = "ai-sp/download.php",
                 UploadHost = "127.0.0.1",
-                UploadPath = "ai-sp/dev/upload.php",
+                UploadPath = "ai-sp/upload.php",
             },
         };
 
