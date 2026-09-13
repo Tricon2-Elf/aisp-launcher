@@ -270,6 +270,7 @@ void InitStreamLock();
 void LogLine(const char* text);
 void DebugLog(const wchar_t* format, const wchar_t* arg);
 bool BuildGameFilePath(const wchar_t* fileName, wchar_t* outPath, size_t outPathCount);
+bool BuildLaunchDataFilePath(const wchar_t* fileName, wchar_t* outPath, size_t outPathCount);
 // aisp.launch.data\aisp.hook.init.log: one line per init step, so a hook that never got as far
 // as the screen log can still be seen. Reset at the start of the init, appended after.
 void ResetInitLog();

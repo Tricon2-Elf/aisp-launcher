@@ -13,7 +13,7 @@
 // launcher downloads), with the older streamlink\ and yt-dlp\ folders next to the game still
 // accepted; [tools] in aisp.hook.ini (or AISP_STREAMLINK, AISP_YTDLP and AISP_FFMPEG) overrides
 // the paths. What yt-dlp resolves for a video (its media URLs and duration) is cached under
-// aisp.cache\yt-dlp (ytdlp.cpp), so a video's loops and later starts do not wait on it.
+// aisp.launch.data\aisp.cache\yt-dlp (ytdlp.cpp), so a video's loops and later starts do not wait on it.
 #include "source.h"
 #include "config.h"
 #include "ytdlp.h"

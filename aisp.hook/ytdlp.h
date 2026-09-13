@@ -1,5 +1,5 @@
 // yt-dlp resolution with a cache: a video's media URLs and its duration, kept on disk under the
-// game directory (aisp.cache\yt-dlp\<hash of the page URL>.txt) and reused across session
+// game's aisp.launch.data (aisp.cache\yt-dlp\<hash of the page URL>.txt) and reused across session
 // starts, loops and game runs. The duration is what makes a video loop in step with the shared
 // timeline, and it never changes; the media URLs are good until the site's expiry (YouTube's
 // expire= in the URL, else a short default), and a refresh runs in the background before a

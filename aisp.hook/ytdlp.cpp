@@ -46,7 +46,7 @@ unsigned long long HashUrl(const wchar_t* url)
 bool CachePath(const wchar_t* pageUrl, wchar_t* out, size_t outCount, bool create)
 {
     wchar_t dir[MAX_PATH] = {};
-    if (!BuildGameFilePath(L"aisp.cache", dir, MAX_PATH))
+    if (!BuildLaunchDataFilePath(L"aisp.cache", dir, MAX_PATH))
         return false;
     if (create)
         CreateDirectoryW(dir, nullptr);
