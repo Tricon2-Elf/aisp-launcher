@@ -107,6 +107,7 @@ internal sealed class LauncherUpdater(LauncherSettings settings, GitHubReleaseCl
                 newDll,
                 Path.Combine(installDir, LauncherExeName),
                 Path.Combine(installDir, HookDllName),
+                Path.Combine(installDir, Path.GetFileName(LauncherSettings.GetPath())),
                 workRoot
             );
 
@@ -186,10 +187,12 @@ internal sealed class LauncherUpdater(LauncherSettings settings, GitHubReleaseCl
         string sourceDll,
         string destExe,
         string destDll,
+        string settingsPath,
         string workRoot
     )
     {
-        // Wait for the launcher to exit, copy both files, relaunch, then clean up.
+        // Wait for the launcher to exit, copy both files, drop stale settings so the new
+        // build writes defaults, relaunch, then clean up.
         var sb = new StringBuilder();
         sb.AppendLine("@echo off");
         sb.AppendLine("setlocal");
@@ -203,6 +206,7 @@ internal sealed class LauncherUpdater(LauncherSettings settings, GitHubReleaseCl
         sb.AppendLine("if errorlevel 1 exit /B 1");
         sb.AppendLine($"copy /Y \"{sourceDll}\" \"{destDll}\" >NUL");
         sb.AppendLine("if errorlevel 1 exit /B 1");
+        sb.AppendLine($"if exist \"{settingsPath}\" del /F /Q \"{settingsPath}\"");
         sb.AppendLine($"start \"\" \"{destExe}\"");
         sb.AppendLine($"rmdir /S /Q \"{workRoot}\"");
         File.WriteAllText(scriptPath, sb.ToString(), Encoding.ASCII);
