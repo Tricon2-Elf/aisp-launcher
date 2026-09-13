@@ -194,8 +194,7 @@ HMODULE WINAPI HookLoadLibraryW(LPCWSTR lpLibFileName)
 // clock and the presenter shows the frame matching the samples played. Volume and mute come
 // from the page, which publishes "aisp:vol=<0-100>;mute=<0|1>" in its title when the client
 // calls its ext_setVolume / ext_setMute script functions. Child processes are attached to a
-// job so they die with the game; stderr of every tool goes to aisp.screen.log next to the game
-// executable.
+// job so they die with the game; stderr of every tool goes to aisp.launch.data\aisp.screen.log.
 //
 // By default ([screens] primary_browser=electron; ie keeps the client's own control, which
 // renders on the game thread and stays black under Wine) a sibling Electron process is the

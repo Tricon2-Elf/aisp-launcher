@@ -257,8 +257,8 @@ extern ScreenStream* g_streams;
 extern CRITICAL_SECTION g_streamsLock;
 extern HANDLE g_job;
 extern HANDLE g_toolLog;
-// aisp.screen.log next to the game, opened on first use (inheritable: the tools' stderr goes
-// there too). Invalid when the game directory cannot be written.
+// aisp.launch.data\aisp.screen.log, opened on first use (inheritable: the tools' stderr goes
+// there too). Invalid when that directory cannot be written.
 HANDLE OpenScreenLog();
 extern bool g_screenVideoInitialised;
 extern bool g_streamsLockReady;
@@ -266,11 +266,11 @@ extern HANDLE g_watchdog;
 extern bool g_logStats;
 void InitStreamLock();
 
-// aisp.screen.log next to the game executable (opened by InitScreenVideo); tool stderr goes there too.
+// aisp.launch.data\aisp.screen.log (opened by InitScreenVideo); tool stderr goes there too.
 void LogLine(const char* text);
 void DebugLog(const wchar_t* format, const wchar_t* arg);
 bool BuildGameFilePath(const wchar_t* fileName, wchar_t* outPath, size_t outPathCount);
-// aisp.hook.init.log next to the game: one line per init step, so a hook that never got as far
+// aisp.launch.data\aisp.hook.init.log: one line per init step, so a hook that never got as far
 // as the screen log can still be seen. Reset at the start of the init, appended after.
 void ResetInitLog();
 void AppendInitLog(const char* text);

@@ -49,13 +49,24 @@ bool BuildGameFilePath(const wchar_t* fileName, wchar_t* outPath, size_t outPath
     return SUCCEEDED(StringCchCopyW(outPath, outPathCount, processPath)) && SUCCEEDED(StringCchCatW(outPath, outPathCount, fileName));
 }
 
+bool BuildLaunchDataFilePath(const wchar_t* fileName, wchar_t* outPath, size_t outPathCount)
+{
+    wchar_t dir[MAX_PATH] = {};
+    if (!BuildGameFilePath(L"aisp.launch.data", dir, MAX_PATH))
+        return false;
+    if (!CreateDirectoryW(dir, nullptr) && GetLastError() != ERROR_ALREADY_EXISTS)
+        return false;
+    return SUCCEEDED(StringCchCopyW(outPath, outPathCount, dir))
+        && SUCCEEDED(StringCchCatW(outPath, outPathCount, L"\\"))
+        && SUCCEEDED(StringCchCatW(outPath, outPathCount, fileName));
+}
 
 HANDLE OpenScreenLog()
 {
     if (g_toolLog != INVALID_HANDLE_VALUE)
         return g_toolLog;
     wchar_t logPath[MAX_PATH] = {};
-    if (!BuildGameFilePath(L"aisp.screen.log", logPath, MAX_PATH))
+    if (!BuildLaunchDataFilePath(L"aisp.screen.log", logPath, MAX_PATH))
         return INVALID_HANDLE_VALUE;
     SECURITY_ATTRIBUTES inheritable = {sizeof(SECURITY_ATTRIBUTES), nullptr, TRUE};
     HANDLE file = CreateFileW(logPath, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE, &inheritable, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
@@ -70,7 +81,7 @@ HANDLE OpenScreenLog()
 void ResetInitLog()
 {
     wchar_t path[MAX_PATH] = {};
-    if (!BuildGameFilePath(L"aisp.hook.init.log", path, MAX_PATH))
+    if (!BuildLaunchDataFilePath(L"aisp.hook.init.log", path, MAX_PATH))
         return;
     HANDLE file = CreateFileW(path, GENERIC_WRITE, FILE_SHARE_READ, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
     if (file != INVALID_HANDLE_VALUE)
@@ -80,7 +91,7 @@ void ResetInitLog()
 void AppendInitLog(const char* text)
 {
     wchar_t path[MAX_PATH] = {};
-    if (!BuildGameFilePath(L"aisp.hook.init.log", path, MAX_PATH))
+    if (!BuildLaunchDataFilePath(L"aisp.hook.init.log", path, MAX_PATH))
         return;
     HANDLE file = CreateFileW(path, FILE_APPEND_DATA, FILE_SHARE_READ, nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
     if (file == INVALID_HANDLE_VALUE)
