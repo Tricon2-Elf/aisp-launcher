@@ -15,8 +15,17 @@ CRITICAL_SECTION g_streamsLock;
 HANDLE g_job = nullptr;
 HANDLE g_toolLog = INVALID_HANDLE_VALUE;
 bool g_screenVideoInitialised = false;
+bool g_streamsLockReady = false;
 HANDLE g_watchdog = nullptr;
 bool g_logStats = false;                 // AISP_SCREEN_STATS=1: the per-second queue line in aisp.screen.log
+
+void InitStreamLock()
+{
+    if (g_streamsLockReady)
+        return;
+    InitializeCriticalSection(&g_streamsLock);
+    g_streamsLockReady = true;
+}
 
 void DebugLog(const wchar_t* format, const wchar_t* arg)
 {
@@ -40,13 +49,24 @@ bool BuildGameFilePath(const wchar_t* fileName, wchar_t* outPath, size_t outPath
     return SUCCEEDED(StringCchCopyW(outPath, outPathCount, processPath)) && SUCCEEDED(StringCchCatW(outPath, outPathCount, fileName));
 }
 
+bool BuildLaunchDataFilePath(const wchar_t* fileName, wchar_t* outPath, size_t outPathCount)
+{
+    wchar_t dir[MAX_PATH] = {};
+    if (!BuildGameFilePath(L"aisp.launch.data", dir, MAX_PATH))
+        return false;
+    if (!CreateDirectoryW(dir, nullptr) && GetLastError() != ERROR_ALREADY_EXISTS)
+        return false;
+    return SUCCEEDED(StringCchCopyW(outPath, outPathCount, dir))
+        && SUCCEEDED(StringCchCatW(outPath, outPathCount, L"\\"))
+        && SUCCEEDED(StringCchCatW(outPath, outPathCount, fileName));
+}
 
 HANDLE OpenScreenLog()
 {
     if (g_toolLog != INVALID_HANDLE_VALUE)
         return g_toolLog;
     wchar_t logPath[MAX_PATH] = {};
-    if (!BuildGameFilePath(L"aisp.screen.log", logPath, MAX_PATH))
+    if (!BuildLaunchDataFilePath(L"aisp.screen.log", logPath, MAX_PATH))
         return INVALID_HANDLE_VALUE;
     SECURITY_ATTRIBUTES inheritable = {sizeof(SECURITY_ATTRIBUTES), nullptr, TRUE};
     HANDLE file = CreateFileW(logPath, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE, &inheritable, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
@@ -61,7 +81,7 @@ HANDLE OpenScreenLog()
 void ResetInitLog()
 {
     wchar_t path[MAX_PATH] = {};
-    if (!BuildGameFilePath(L"aisp.hook.init.log", path, MAX_PATH))
+    if (!BuildLaunchDataFilePath(L"aisp.hook.init.log", path, MAX_PATH))
         return;
     HANDLE file = CreateFileW(path, GENERIC_WRITE, FILE_SHARE_READ, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
     if (file != INVALID_HANDLE_VALUE)
@@ -71,7 +91,7 @@ void ResetInitLog()
 void AppendInitLog(const char* text)
 {
     wchar_t path[MAX_PATH] = {};
-    if (!BuildGameFilePath(L"aisp.hook.init.log", path, MAX_PATH))
+    if (!BuildLaunchDataFilePath(L"aisp.hook.init.log", path, MAX_PATH))
         return;
     HANDLE file = CreateFileW(path, FILE_APPEND_DATA, FILE_SHARE_READ, nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
     if (file == INVALID_HANDLE_VALUE)
@@ -106,21 +126,49 @@ void SetStatus(ScreenStream* stream, const wchar_t* text)
     DebugLog(L"aisp.hook: screen: %s\n", text);
 }
 
-// The tool path from the environment variable or [tools] key, else `fallback`; a relative
-// path is taken from the game directory.
-bool ToolPath(const wchar_t* variable, const wchar_t* key, const wchar_t* fallback, wchar_t* out, size_t outCount)
+// The tool path from the environment variable or [tools] key, else `fallback` (then
+// `altFallback`); a relative path is taken from the game directory.
+namespace
 {
-    wchar_t configured[MAX_PATH] = {};
-    const wchar_t* path = ConfigString(variable, L"tools", key, configured, MAX_PATH) ? configured : fallback;
+bool FillToolPath(const wchar_t* path, wchar_t* out, size_t outCount)
+{
+    if (!path || !path[0])
+        return false;
     const bool absolute = path[0] == L'\\' || path[0] == L'/' || (path[0] && path[1] == L':');
     if (absolute)
+        return SUCCEEDED(StringCchCopyW(out, outCount, path));
+    return BuildGameFilePath(path, out, outCount);
+}
+} // namespace
+
+bool ToolPath(const wchar_t* variable, const wchar_t* key, const wchar_t* fallback, wchar_t* out, size_t outCount)
+{
+    return ToolPath(variable, key, fallback, nullptr, out, outCount);
+}
+
+bool ToolPath(
+    const wchar_t* variable,
+    const wchar_t* key,
+    const wchar_t* fallback,
+    const wchar_t* altFallback,
+    wchar_t* out,
+    size_t outCount
+)
+{
+    wchar_t configured[MAX_PATH] = {};
+    if (ConfigString(variable, L"tools", key, configured, MAX_PATH))
     {
-        if (FAILED(StringCchCopyW(out, outCount, path)))
+        if (!FillToolPath(configured, out, outCount))
             return false;
+        return GetFileAttributesW(out) != INVALID_FILE_ATTRIBUTES;
     }
-    else if (!BuildGameFilePath(path, out, outCount))
-        return false;
-    return GetFileAttributesW(out) != INVALID_FILE_ATTRIBUTES;
+    if (FillToolPath(fallback, out, outCount) && GetFileAttributesW(out) != INVALID_FILE_ATTRIBUTES)
+        return true;
+    if (FillToolPath(altFallback, out, outCount) && GetFileAttributesW(out) != INVALID_FILE_ATTRIBUTES)
+        return true;
+    if (!FillToolPath(fallback, out, outCount))
+        FillToolPath(altFallback, out, outCount);
+    return false;
 }
 
 // Starts a child with the given standard handles (nullptr = the log file / nothing) and puts it

@@ -257,27 +257,52 @@ extern ScreenStream* g_streams;
 extern CRITICAL_SECTION g_streamsLock;
 extern HANDLE g_job;
 extern HANDLE g_toolLog;
-// aisp.screen.log next to the game, opened on first use (inheritable: the tools' stderr goes
-// there too). Invalid when the game directory cannot be written.
+// aisp.launch.data\aisp.screen.log, opened on first use (inheritable: the tools' stderr goes
+// there too). Invalid when that directory cannot be written.
 HANDLE OpenScreenLog();
 extern bool g_screenVideoInitialised;
+extern bool g_streamsLockReady;
 extern HANDLE g_watchdog;
 extern bool g_logStats;
+void InitStreamLock();
 
-// aisp.screen.log next to the game executable (opened by InitScreenVideo); tool stderr goes there too.
+// aisp.launch.data\aisp.screen.log (opened by InitScreenVideo); tool stderr goes there too.
 void LogLine(const char* text);
 void DebugLog(const wchar_t* format, const wchar_t* arg);
 bool BuildGameFilePath(const wchar_t* fileName, wchar_t* outPath, size_t outPathCount);
-// aisp.hook.init.log next to the game: one line per init step, so a hook that never got as far
+bool BuildLaunchDataFilePath(const wchar_t* fileName, wchar_t* outPath, size_t outPathCount);
+// aisp.launch.data\aisp.hook.init.log: one line per init step, so a hook that never got as far
 // as the screen log can still be seen. Reset at the start of the init, appended after.
 void ResetInitLog();
 void AppendInitLog(const char* text);
 // The line the screen shows while a source has nothing to draw yet (or failed).
 void SetStatus(ScreenStream* stream, const wchar_t* text);
 
-// Child processes: resolved from [tools] in aisp.hook.ini, an environment variable, or the game
-// directory; attached to the job so they die with the game, stderr to the log.
+// Child processes: resolved from [tools] in aisp.hook.ini, an environment variable of the same
+// meaning, then these paths under aisp.launch.data next to the game (the layout the launcher
+// downloads into). Legacy folders beside the game still work when the new ones are missing.
+// Attached to the job so they die with the game; stderr goes to the log.
+inline constexpr wchar_t kFfmpegFallback[] =
+    L"aisp.launch.data\\media\\windows-x86_64\\ffmpeg\\ffmpeg.exe";
+inline constexpr wchar_t kFfmpegFallbackLegacy[] = L"streamlink\\ffmpeg\\ffmpeg.exe";
+inline constexpr wchar_t kStreamlinkFallback[] =
+    L"aisp.launch.data\\media\\windows-x86_64\\bin\\streamlink.exe";
+inline constexpr wchar_t kStreamlinkFallbackLegacy[] = L"streamlink\\bin\\streamlink.exe";
+inline constexpr wchar_t kYtdlpFallback[] =
+    L"aisp.launch.data\\media\\windows-x86_64\\yt-dlp.exe";
+inline constexpr wchar_t kYtdlpFallbackLegacy[] = L"yt-dlp\\yt-dlp.exe";
+inline constexpr wchar_t kElectronFallback[] = L"aisp.launch.data\\electron\\electron.exe";
+inline constexpr wchar_t kElectronFallbackLegacy[] = L"aisp.electron\\electron.exe";
+
 bool ToolPath(const wchar_t* variable, const wchar_t* key, const wchar_t* fallback, wchar_t* out, size_t outCount);
+bool ToolPath(
+    const wchar_t* variable,
+    const wchar_t* key,
+    const wchar_t* fallback,
+    const wchar_t* altFallback,
+    wchar_t* out,
+    size_t outCount
+);
 HANDLE LaunchTool(wchar_t* commandLine, HANDLE stdIn, HANDLE stdOut);
 // Electron/Node under Wine crash if stdout is a Wine file or pipe (uv_pipe_open EINVAL), so the
 // browser host starts with NUL stdio, hidden, in the job.

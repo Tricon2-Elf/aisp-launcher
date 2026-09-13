@@ -8,6 +8,10 @@ on:
     branches:
       - main
 
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
@@ -29,8 +33,10 @@ jobs:
         with:
           name: hook-win-x86
           path: build/aisp.hook.dll
+          if-no-files-found: error
 
   build-windows:
+    needs: [build-hook]
     runs-on: windows-latest
     steps:
       - name: Checkout repository
@@ -46,3 +52,25 @@ jobs:
           dotnet publish aisp.launch/aisp.launch.csproj
           -c Release
           -p:PublishProfile=win-x86
+
+      - name: Download hook DLL
+        uses: actions/download-artifact@v4
+        with:
+          name: hook-win-x86
+          path: aisp.launch/bin/publish/win-x86
+
+      - name: Package win-x86 launcher bundle
+        shell: pwsh
+        run: |
+          $bundleDir = "aisp.launch/bin/publish/win-x86/launcher-bundle"
+          New-Item -ItemType Directory -Path $bundleDir -Force | Out-Null
+          Copy-Item "aisp.launch/bin/publish/win-x86/aisp.launch.exe" $bundleDir -Force
+          Copy-Item "aisp.launch/bin/publish/win-x86/aisp.hook.dll" $bundleDir -Force
+          Compress-Archive -Path "$bundleDir/*" -DestinationPath "aisp.launch/bin/publish/win-x86/aisp.launch.win-x86.bundle.zip" -Force
+
+      - name: Upload launcher bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: launcher-win-x86
+          path: aisp.launch/bin/publish/win-x86/aisp.launch.win-x86.bundle.zip
+          if-no-files-found: error

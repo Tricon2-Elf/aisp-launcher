@@ -46,7 +46,7 @@ unsigned long long HashUrl(const wchar_t* url)
 bool CachePath(const wchar_t* pageUrl, wchar_t* out, size_t outCount, bool create)
 {
     wchar_t dir[MAX_PATH] = {};
-    if (!BuildGameFilePath(L"aisp.cache", dir, MAX_PATH))
+    if (!BuildLaunchDataFilePath(L"aisp.cache", dir, MAX_PATH))
         return false;
     if (create)
         CreateDirectoryW(dir, nullptr);
@@ -168,7 +168,7 @@ void WriteCache(const wchar_t* pageUrl, const YtdlpInfo& info)
 bool RunYtdlp(const wchar_t* pageUrl, YtdlpInfo& info, wchar_t* error, size_t errorCount)
 {
     wchar_t ytdlp[MAX_PATH] = {};
-    if (!ToolPath(L"AISP_YTDLP", L"ytdlp", L"yt-dlp\\yt-dlp.exe", ytdlp, MAX_PATH))
+    if (!ToolPath(L"AISP_YTDLP", L"ytdlp", kYtdlpFallback, kYtdlpFallbackLegacy, ytdlp, MAX_PATH))
     {
         StringCchPrintfW(error, errorCount, L"yt-dlp not found: %s", ytdlp);
         return false;
