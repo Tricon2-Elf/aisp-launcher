@@ -3,6 +3,10 @@ name: Release Launcher
 on:
   workflow_dispatch:
 
+concurrency:
+  group: launcher-release
+  cancel-in-progress: false
+
 permissions:
   contents: write
 
@@ -56,6 +60,7 @@ jobs:
         with:
           name: hook-win-x86
           path: build/aisp.hook.dll
+          if-no-files-found: error
 
   build-windows:
     needs: [calver, build-hook]
@@ -97,6 +102,7 @@ jobs:
         with:
           name: launcher-win-x86
           path: aisp.launch/bin/publish/win-x86/aisp.launch.win-x86.bundle.zip
+          if-no-files-found: error
 
   release:
     needs: [calver, build-windows]
@@ -115,8 +121,9 @@ jobs:
         env:
           VERSION: ${{ needs.calver.outputs.version }}
         run: |
+          mkdir -p dist
           cp "dist/launcher-win-x86/aisp.launch.win-x86.bundle.zip" "dist/aisp.launch-${VERSION}-win-x86.zip"
-          sha256sum dist/aisp.launch-* > dist/SHA256SUMS
+          (cd dist && sha256sum "aisp.launch-${VERSION}-win-x86.zip" > SHA256SUMS)
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
