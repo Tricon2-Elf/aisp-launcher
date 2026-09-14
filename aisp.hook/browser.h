@@ -22,9 +22,9 @@ void CloseBrowserChannel(HANDLE handle, bool tcp);
 bool WriteBrowserChannel(HANDLE handle, bool tcp, const void* data, size_t length);
 
 // Opens one screen in the off-screen host: a window in the game's one Electron, started by the
-// first screen that needs it. Windows: aisp.launch.data\electron\electron.exe + named pipes. Wine: listen on
-// 127.0.0.1 TCP and ask the native broker (AISP_ELECTRON_NATIVE, default 127.0.0.1:18764) to
-// spawn stock Linux Electron with the same app. `framed` makes the video channel carry headed
+// first screen that needs it. Windows: aisp.launch.data\electron\electron.exe + named pipes.
+// Wine: the hook listens on 127.0.0.1 TCP and starts a stock Linux Electron ([tools]
+// electron_native) with the same app itself. `framed` makes the video channel carry headed
 // messages (frames, title lines, call replies) instead of bare frames. outProcess is always
 // null now: no screen owns the host; closing a screen's channels closes its window.
 struct ElectronSessionRequest

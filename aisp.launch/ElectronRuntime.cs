@@ -14,12 +14,18 @@ internal static partial class ElectronRuntime
     [GeneratedRegex(@"^([0-9a-fA-F]{64})\s+\*?(\S+)$", RegexOptions.CultureInvariant)]
     private static partial Regex ShaLineRegex();
 
+    public static bool UseWindowsElectronBinary =>
+        RuntimeDataPaths.DetectPlatform().IsWindows && !WineDetection.IsRunningOnWine;
+
     public static string ElectronExecutablePath =>
         Path.Combine(
             RuntimeDataPaths.ElectronDirectory,
-            RuntimeDataPaths.DetectPlatform().IsWindows ? "electron.exe" : "electron"
+            UseWindowsElectronBinary ? "electron.exe" : "electron"
         );
 
+    // resources/app on every platform: with default_app.asar removed below, that is the only
+    // place Electron loads an app from on its own; a sibling app/ would need the default app to
+    // read the path argument, and the hook passes whichever of the two exists.
     public static string AppDirectory =>
         Path.Combine(RuntimeDataPaths.ElectronDirectory, "resources", "app");
 
@@ -74,7 +80,8 @@ internal static partial class ElectronRuntime
     )
     {
         var platform = RuntimeDataPaths.DetectPlatform();
-        if (platform.IsLinux && platform.Architecture != "x86_64")
+        var windowsBinary = UseWindowsElectronBinary;
+        if (!windowsBinary && platform.IsLinux && platform.Architecture != "x86_64")
         {
             throw new PlatformNotSupportedException(
                 $"Electron v{Version} auto-download is only configured for linux-x64 "
@@ -82,7 +89,7 @@ internal static partial class ElectronRuntime
             );
         }
 
-        var zipName = platform.IsWindows
+        var zipName = windowsBinary
             ? $"electron-v{Version}-win32-x64.zip"
             : $"electron-v{Version}-linux-x64.zip";
         var downloadUrl =
@@ -122,7 +129,7 @@ internal static partial class ElectronRuntime
             status?.Report("Extracting Electron…");
             ExtractZipSafely(zipPath, extractDir);
 
-            var extractedElectron = FindElectronBinary(extractDir, platform.IsWindows);
+            var extractedElectron = FindElectronBinary(extractDir, windowsBinary);
             if (extractedElectron is null)
             {
                 throw new InvalidOperationException(
@@ -137,10 +144,24 @@ internal static partial class ElectronRuntime
             var sourceRoot = Path.GetDirectoryName(extractedElectron)!;
             CopyDirectory(sourceRoot, targetDir);
 
-            if (!platform.IsWindows)
+            // The zip carries no Unix modes. Under Wine .NET cannot set them, so chmod does it:
+            // the hook execs this binary natively and needs the x bit.
+            if (!windowsBinary)
             {
-                TryMakeExecutable(ElectronExecutablePath);
-                TryMakeExecutable(Path.Combine(targetDir, "chrome_crashpad_handler"));
+                if (WineDetection.IsRunningOnWine)
+                {
+                    WineUnix.RunWait(
+                        "/bin/chmod",
+                        "+x",
+                        WineUnix.GetUnixPath(ElectronExecutablePath),
+                        WineUnix.GetUnixPath(Path.Combine(targetDir, "chrome_crashpad_handler"))
+                    );
+                }
+                else
+                {
+                    TryMakeExecutable(ElectronExecutablePath);
+                    TryMakeExecutable(Path.Combine(targetDir, "chrome_crashpad_handler"));
+                }
             }
 
             if (!IsInstalled())

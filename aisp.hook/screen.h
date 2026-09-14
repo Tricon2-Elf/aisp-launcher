@@ -293,6 +293,10 @@ inline constexpr wchar_t kYtdlpFallback[] =
 inline constexpr wchar_t kYtdlpFallbackLegacy[] = L"yt-dlp\\yt-dlp.exe";
 inline constexpr wchar_t kElectronFallback[] = L"aisp.launch.data\\electron\\electron.exe";
 inline constexpr wchar_t kElectronFallbackLegacy[] = L"aisp.electron\\electron.exe";
+// Wine: the native Linux Electron the hook execs (the launcher installs the linux-x64 archive
+// into aisp.launch.data\electron-linux; a legacy unpack beside the game works too).
+inline constexpr wchar_t kElectronNativeFallback[] = L"aisp.launch.data\\electron-linux\\electron";
+inline constexpr wchar_t kElectronNativeFallbackLegacy[] = L"aisp.electron\\electron";
 
 bool ToolPath(const wchar_t* variable, const wchar_t* key, const wchar_t* fallback, wchar_t* out, size_t outCount);
 bool ToolPath(
@@ -303,6 +307,11 @@ bool ToolPath(
     wchar_t* out,
     size_t outCount
 );
+// Wine only (false on Windows): between a DOS path and the Unix path behind it, through the
+// converters Wine's kernel32 exports. A configured Unix path (/home/...) becomes a DOS path for
+// the file checks; a resolved DOS path becomes the Unix argv for a native program.
+bool UnixPathToDos(const wchar_t* unixPath, wchar_t* out, size_t outCount);
+bool DosPathToUnix(const wchar_t* dosPath, wchar_t* out, size_t outCount);
 HANDLE LaunchTool(wchar_t* commandLine, HANDLE stdIn, HANDLE stdOut);
 // Electron/Node under Wine crash if stdout is a Wine file or pipe (uv_pipe_open EINVAL), so the
 // browser host starts with NUL stdio, hidden, in the job.

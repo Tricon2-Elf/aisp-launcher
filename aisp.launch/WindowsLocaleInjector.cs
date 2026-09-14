@@ -11,6 +11,9 @@ internal static class WindowsLocaleInjector
     private const uint MemRelease = 0x00008000;
     private const uint PageReadWrite = 0x04;
     private const uint Infinite = 0xFFFFFFFF;
+    private const uint WaitObject0 = 0;
+    private const uint StillActive = 259;
+    private const uint WineLoadLibraryTimeoutMs = 15000;
 
     public static GameLaunchResult TryLaunchWithHook(
         string executable,
@@ -165,7 +168,15 @@ internal static class WindowsLocaleInjector
 
             try
             {
-                WaitForSingleObject(remoteThread, Infinite);
+                var timeout = WineDetection.IsRunningOnWine
+                    ? WineLoadLibraryTimeoutMs
+                    : Infinite;
+                var waited = WaitForSingleObject(remoteThread, timeout);
+                if (waited != WaitObject0)
+                    return GameLaunchResult.Failure(
+                        "Remote LoadLibraryW timed out.",
+                        dllPath
+                    );
                 if (!GetExitCodeThread(remoteThread, out var exitCode))
                     return GameLaunchResult.Failure(
                         "Failed to query remote loader thread result.",
@@ -173,7 +184,7 @@ internal static class WindowsLocaleInjector
                             Marshal.GetLastWin32Error()
                         ).Message
                     );
-                if (exitCode == 0)
+                if (exitCode == 0 || exitCode == StillActive)
                     return GameLaunchResult.Failure(
                         "Remote LoadLibraryW returned failure.",
                         dllPath

@@ -20,6 +20,16 @@ class Program
         AppBuilder
             .Configure<App>()
             .UsePlatformDetect()
+            // Wine has no working ANGLE/D3D11 for Avalonia's default Win32 renderer: every
+            // surface paints black. Software rendering draws the same UI.
+            .With(
+                new Win32PlatformOptions
+                {
+                    RenderingMode = WineDetection.IsRunningOnWine
+                        ? [Win32RenderingMode.Software]
+                        : [Win32RenderingMode.AngleEgl, Win32RenderingMode.Software],
+                }
+            )
 #if DEBUG
             .WithDeveloperTools()
 #endif
