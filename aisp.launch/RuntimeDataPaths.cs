@@ -13,7 +13,12 @@ internal static class RuntimeDataPaths
 
     public static string DataRoot => Path.Combine(InstallDirectory, DataDirectoryName);
 
-    public static string ElectronDirectory => Path.Combine(DataRoot, ElectronDirectoryName);
+    // Wine uses a native Linux Electron via host.js, not electron.exe in the prefix.
+    public static string ElectronDirectory =>
+        Path.Combine(
+            DataRoot,
+            WineDetection.IsRunningOnWine ? "electron-linux" : ElectronDirectoryName
+        );
 
     public static string MediaPlatformDirectory =>
         Path.Combine(DataRoot, MediaDirectoryName, DetectPlatform().CacheKey);

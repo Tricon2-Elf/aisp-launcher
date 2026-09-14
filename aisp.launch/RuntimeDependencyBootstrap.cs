@@ -38,6 +38,13 @@ internal static class RuntimeDependencyBootstrap
             .EnsureInstalledAsync(http, status, downloadProgress, cancellationToken)
             .ConfigureAwait(false);
 
+        if (WineDetection.IsRunningOnWine)
+        {
+            await NativeElectronBroker
+                .EnsureListeningAsync(status, cancellationToken)
+                .ConfigureAwait(false);
+        }
+
         // Reset progress between large downloads so the UI bar starts fresh.
         downloadProgress?.Report(0);
 
@@ -63,7 +70,10 @@ internal static class RuntimeDependencyBootstrap
     {
         try
         {
-            if (File.Exists(ElectronRuntime.ElectronExecutablePath))
+            if (
+                !WineDetection.IsRunningOnWine
+                && File.Exists(ElectronRuntime.ElectronExecutablePath)
+            )
             {
                 Environment.SetEnvironmentVariable(
                     "AISP_ELECTRON",

@@ -70,10 +70,22 @@ function spawnSession(args) {
   if (args.framed)
     childArgs.push(`--framed=${args.framed}`);
   log(`spawn ${electronBin} ${childArgs.join(" ")}`);
+  spawnElectron(childArgs);
+}
+
+function childEnv() {
+  const env = { ...process.env };
+  // The Wine launcher can start this file as `ELECTRON_RUN_AS_NODE=1 electron host.js`.
+  // The real Chromium children must not inherit that.
+  delete env.ELECTRON_RUN_AS_NODE;
+  return env;
+}
+
+function spawnElectron(childArgs) {
   const child = spawn(electronBin, childArgs, {
     stdio: "ignore",
     detached: true,
-    env: process.env,
+    env: childEnv(),
   });
   child.unref();
 }
@@ -83,12 +95,7 @@ function spawnHub(spec) {
     throw new Error("hub needs 127.0.0.1:port");
   const childArgs = ["--no-sandbox", appDir, `--hub=${spec}`, "--wine=1"];
   log(`spawn ${electronBin} ${childArgs.join(" ")}`);
-  const child = spawn(electronBin, childArgs, {
-    stdio: "ignore",
-    detached: true,
-    env: process.env,
-  });
-  child.unref();
+  spawnElectron(childArgs);
 }
 
 const server = net.createServer((socket) => {

@@ -10,18 +10,27 @@ internal static partial class ElectronRuntime
 
     private const string EmbeddedMainJs = "aisp.electron.app.main.js";
     private const string EmbeddedPackageJson = "aisp.electron.app.package.json";
+    private const string EmbeddedHostJs = "aisp.electron.host.js";
 
     [GeneratedRegex(@"^([0-9a-fA-F]{64})\s+\*?(\S+)$", RegexOptions.CultureInvariant)]
     private static partial Regex ShaLineRegex();
 
+    public static bool UseWindowsElectronBinary =>
+        RuntimeDataPaths.DetectPlatform().IsWindows && !WineDetection.IsRunningOnWine;
+
     public static string ElectronExecutablePath =>
         Path.Combine(
             RuntimeDataPaths.ElectronDirectory,
-            RuntimeDataPaths.DetectPlatform().IsWindows ? "electron.exe" : "electron"
+            UseWindowsElectronBinary ? "electron.exe" : "electron"
         );
 
     public static string AppDirectory =>
-        Path.Combine(RuntimeDataPaths.ElectronDirectory, "resources", "app");
+        WineDetection.IsRunningOnWine
+            ? Path.Combine(RuntimeDataPaths.ElectronDirectory, "app")
+            : Path.Combine(RuntimeDataPaths.ElectronDirectory, "resources", "app");
+
+    public static string HostJsPath =>
+        Path.Combine(RuntimeDataPaths.ElectronDirectory, "host.js");
 
     public static bool IsInstalled() => File.Exists(ElectronExecutablePath);
 
@@ -59,6 +68,8 @@ internal static partial class ElectronRuntime
 
         WriteEmbeddedResource(EmbeddedMainJs, Path.Combine(appDir, "main.js"));
         WriteEmbeddedResource(EmbeddedPackageJson, Path.Combine(appDir, "package.json"));
+        if (WineDetection.IsRunningOnWine)
+            WriteEmbeddedResource(EmbeddedHostJs, HostJsPath);
 
         // Prefer our app folder over Electron's stock default_app.asar.
         TryDeleteFile(
@@ -74,7 +85,8 @@ internal static partial class ElectronRuntime
     )
     {
         var platform = RuntimeDataPaths.DetectPlatform();
-        if (platform.IsLinux && platform.Architecture != "x86_64")
+        var windowsBinary = UseWindowsElectronBinary;
+        if (!windowsBinary && platform.IsLinux && platform.Architecture != "x86_64")
         {
             throw new PlatformNotSupportedException(
                 $"Electron v{Version} auto-download is only configured for linux-x64 "
@@ -82,7 +94,7 @@ internal static partial class ElectronRuntime
             );
         }
 
-        var zipName = platform.IsWindows
+        var zipName = windowsBinary
             ? $"electron-v{Version}-win32-x64.zip"
             : $"electron-v{Version}-linux-x64.zip";
         var downloadUrl =
@@ -122,7 +134,7 @@ internal static partial class ElectronRuntime
             status?.Report("Extracting Electron…");
             ExtractZipSafely(zipPath, extractDir);
 
-            var extractedElectron = FindElectronBinary(extractDir, platform.IsWindows);
+            var extractedElectron = FindElectronBinary(extractDir, windowsBinary);
             if (extractedElectron is null)
             {
                 throw new InvalidOperationException(
@@ -137,7 +149,7 @@ internal static partial class ElectronRuntime
             var sourceRoot = Path.GetDirectoryName(extractedElectron)!;
             CopyDirectory(sourceRoot, targetDir);
 
-            if (!platform.IsWindows)
+            if (!windowsBinary && !WineDetection.IsRunningOnWine)
             {
                 TryMakeExecutable(ElectronExecutablePath);
                 TryMakeExecutable(Path.Combine(targetDir, "chrome_crashpad_handler"));
