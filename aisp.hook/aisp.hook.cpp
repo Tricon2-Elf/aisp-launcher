@@ -344,6 +344,30 @@ void InitWebOpenUrl()
     DebugLog(L"aisp.hook: web open: %s\n", g_webOpenUrl);
 }
 
+// ---------------------------------------------------------------------------------------------
+// Text quality. The client rasterises its UI text with GDI (CreateFontIndirectW asking for
+// CLEARTYPE_QUALITY, TextOutW into a white-on-black DIB) and then alpha-tests the result on the
+// GPU: every anti-aliased edge pixel survives the test as solid, so glyphs come out bloated
+// and blurry. The game's era assumed ClearType off; on Linux the only known workaround was to
+// turn font anti-aliasing off for the whole desktop. [text] antialias=0 (the default) forces
+// NONANTIALIASED_QUALITY on every font the game creates instead; 1 leaves the client's request.
+// ---------------------------------------------------------------------------------------------
+
+using CreateFontIndirectW_t = HFONT(WINAPI*)(const LOGFONTW*);
+CreateFontIndirectW_t g_originalCreateFontIndirectW = nullptr;
+bool g_aliasedText = true;
+
+HFONT WINAPI HookCreateFontIndirectW(const LOGFONTW* logFont)
+{
+    if (!g_originalCreateFontIndirectW)
+        return nullptr;
+    if (!g_aliasedText || !logFont || logFont->lfQuality == NONANTIALIASED_QUALITY)
+        return g_originalCreateFontIndirectW(logFont);
+    LOGFONTW aliased = *logFont;
+    aliased.lfQuality = NONANTIALIASED_QUALITY;
+    return g_originalCreateFontIndirectW(&aliased);
+}
+
 HINSTANCE WINAPI HookShellExecuteW(HWND hwnd, LPCWSTR operation, LPCWSTR file, LPCWSTR parameters, LPCWSTR directory, INT show)
 {
     const wchar_t* target = file;
@@ -2234,6 +2258,14 @@ void PatchModule(HMODULE module)
     PatchImport(module, "LoadLibraryW", reinterpret_cast<void*>(HookLoadLibraryW), &g_originalLoadLibraryW);
 }
 
+void PatchTextQuality()
+{
+    g_aliasedText = ConfigSwitch(L"AISP_TEXT_ANTIALIAS", L"text", L"antialias") != Switch::On;
+    if (!g_aliasedText)
+        return;
+    PatchSingleImport(GetModuleHandleW(nullptr), "GDI32.dll", "CreateFontIndirectW", reinterpret_cast<void*>(HookCreateFontIndirectW), &g_originalCreateFontIndirectW);
+}
+
 void PatchLoadedModules()
 {
     const DWORD processId = GetCurrentProcessId();
@@ -2284,6 +2316,8 @@ DWORD WINAPI InitHooksThread(LPVOID deferred)
     AppendInitLog("init: ole32 patched");
     PatchSingleImport(GetModuleHandleW(nullptr), "SHELL32.dll", "ShellExecuteW", reinterpret_cast<void*>(HookShellExecuteW), &g_originalShellExecuteW);
     AppendInitLog("init: shell32 patched");
+    PatchTextQuality();
+    AppendInitLog(g_aliasedText ? "init: text aliased" : "init: text as the client asks");
     PatchTvCommentButton();
     AppendInitLog("init: tv button");
     PatchNicoliveReloadNotify();
