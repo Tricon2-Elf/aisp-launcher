@@ -22,7 +22,6 @@ public partial class MainWindow : Window
         _gameLauncher = new GameLauncher(LauncherBootstrap.Settings);
         _updater = new LauncherUpdater(LauncherBootstrap.Settings);
 
-        LauncherBootstrap.ConfigureWebViewEnvironment(WebsiteWebView);
         EnvironmentComboBox.SelectedIndex = Math.Clamp(
             (int)LauncherBootstrap.Settings.SelectedEnvironment,
             0,
@@ -32,9 +31,29 @@ public partial class MainWindow : Window
         LocaleReplacerCheckBox.IsEnabled = RuntimeInformation.IsOSPlatform(OSPlatform.Windows);
         if (!LocaleReplacerCheckBox.IsEnabled)
             LocaleReplacerCheckBox.Content = "Use Locale Replacer (Windows only)";
-        WebsiteWebView.Source = new Uri(_gameLauncher.Settings.WebsiteUrl);
+        AttachWebsitePane(_gameLauncher.Settings.WebsiteUrl);
 
         Opened += OnOpened;
+    }
+
+    private void AttachWebsitePane(string websiteUrl)
+    {
+        // NativeWebView on this WinExe is WebView2. Wine has no usable host, and
+        // constructing the control can take the process down; leave the pane empty.
+        if (WineDetection.IsRunningOnWine)
+            return;
+
+        try
+        {
+            var webView = new NativeWebView();
+            LauncherBootstrap.ConfigureWebViewEnvironment(webView);
+            WebsiteHost.Content = webView;
+            webView.Source = new Uri(websiteUrl);
+        }
+        catch
+        {
+            // Missing or broken WebView2: keep the empty pane.
+        }
     }
 
     private async void OnOpened(object? sender, EventArgs e)
