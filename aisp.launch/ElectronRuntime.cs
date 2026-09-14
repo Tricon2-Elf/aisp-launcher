@@ -23,10 +23,11 @@ internal static partial class ElectronRuntime
             UseWindowsElectronBinary ? "electron.exe" : "electron"
         );
 
+    // resources/app on every platform: with default_app.asar removed below, that is the only
+    // place Electron loads an app from on its own; a sibling app/ would need the default app to
+    // read the path argument, and the hook passes whichever of the two exists.
     public static string AppDirectory =>
-        WineDetection.IsRunningOnWine
-            ? Path.Combine(RuntimeDataPaths.ElectronDirectory, "app")
-            : Path.Combine(RuntimeDataPaths.ElectronDirectory, "resources", "app");
+        Path.Combine(RuntimeDataPaths.ElectronDirectory, "resources", "app");
 
     public static bool IsInstalled() => File.Exists(ElectronExecutablePath);
 
