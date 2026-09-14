@@ -10,7 +10,6 @@ internal static partial class ElectronRuntime
 
     private const string EmbeddedMainJs = "aisp.electron.app.main.js";
     private const string EmbeddedPackageJson = "aisp.electron.app.package.json";
-    private const string EmbeddedHostJs = "aisp.electron.host.js";
 
     [GeneratedRegex(@"^([0-9a-fA-F]{64})\s+\*?(\S+)$", RegexOptions.CultureInvariant)]
     private static partial Regex ShaLineRegex();
@@ -28,9 +27,6 @@ internal static partial class ElectronRuntime
         WineDetection.IsRunningOnWine
             ? Path.Combine(RuntimeDataPaths.ElectronDirectory, "app")
             : Path.Combine(RuntimeDataPaths.ElectronDirectory, "resources", "app");
-
-    public static string HostJsPath =>
-        Path.Combine(RuntimeDataPaths.ElectronDirectory, "host.js");
 
     public static bool IsInstalled() => File.Exists(ElectronExecutablePath);
 
@@ -68,8 +64,6 @@ internal static partial class ElectronRuntime
 
         WriteEmbeddedResource(EmbeddedMainJs, Path.Combine(appDir, "main.js"));
         WriteEmbeddedResource(EmbeddedPackageJson, Path.Combine(appDir, "package.json"));
-        if (WineDetection.IsRunningOnWine)
-            WriteEmbeddedResource(EmbeddedHostJs, HostJsPath);
 
         // Prefer our app folder over Electron's stock default_app.asar.
         TryDeleteFile(
@@ -149,10 +143,24 @@ internal static partial class ElectronRuntime
             var sourceRoot = Path.GetDirectoryName(extractedElectron)!;
             CopyDirectory(sourceRoot, targetDir);
 
-            if (!windowsBinary && !WineDetection.IsRunningOnWine)
+            // The zip carries no Unix modes. Under Wine .NET cannot set them, so chmod does it:
+            // the hook execs this binary natively and needs the x bit.
+            if (!windowsBinary)
             {
-                TryMakeExecutable(ElectronExecutablePath);
-                TryMakeExecutable(Path.Combine(targetDir, "chrome_crashpad_handler"));
+                if (WineDetection.IsRunningOnWine)
+                {
+                    WineUnix.RunWait(
+                        "/bin/chmod",
+                        "+x",
+                        WineUnix.GetUnixPath(ElectronExecutablePath),
+                        WineUnix.GetUnixPath(Path.Combine(targetDir, "chrome_crashpad_handler"))
+                    );
+                }
+                else
+                {
+                    TryMakeExecutable(ElectronExecutablePath);
+                    TryMakeExecutable(Path.Combine(targetDir, "chrome_crashpad_handler"));
+                }
             }
 
             if (!IsInstalled())

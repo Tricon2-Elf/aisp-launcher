@@ -61,6 +61,5 @@
   <ItemGroup>
     <EmbeddedResource Include="..\aisp.electron\app\main.js" LogicalName="aisp.electron.app.main.js" />
     <EmbeddedResource Include="..\aisp.electron\app\package.json" LogicalName="aisp.electron.app.package.json" />
-    <EmbeddedResource Include="..\aisp.electron\host.js" LogicalName="aisp.electron.host.js" />
   </ItemGroup>
 </Project>

@@ -205,9 +205,9 @@ HMODULE WINAPI HookLoadLibraryW(LPCWSTR lpLibFileName)
 // get_innerHTML fetch the element from Electron's page, so neither mshtml nor Wine's Gecko is
 // involved. The secondary compositor (electron: or ffmpeg) is unchanged — sites
 // refuse iframes, and streams need a real decoder. On Windows both primary and electron: are
-// aisp.launch.data\electron\electron.exe over named pipes. On Wine they are a stock native Electron started
-// by aisp.electron/host.js over loopback TCP (Wine named pipes are not a Unix socket a Linux
-// Node can connect to).
+// aisp.launch.data\electron\electron.exe over named pipes. On Wine they are a stock native Linux
+// Electron the hook execs directly ([tools] electron_native), over loopback TCP (Wine named
+// pipes are not a Unix socket it could connect to).
 //
 // Help, the event board and CCustomBrowserWindow also CoCreateInstance(CLSID_WebBrowser), so
 // they share this vtable patch, but they are windowed AtlAxWin hosts (ShowWindow into an IF

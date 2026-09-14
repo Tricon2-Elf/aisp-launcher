@@ -38,13 +38,6 @@ internal static class RuntimeDependencyBootstrap
             .EnsureInstalledAsync(http, status, downloadProgress, cancellationToken)
             .ConfigureAwait(false);
 
-        if (WineDetection.IsRunningOnWine)
-        {
-            await NativeElectronBroker
-                .EnsureListeningAsync(status, cancellationToken)
-                .ConfigureAwait(false);
-        }
-
         // Reset progress between large downloads so the UI bar starts fresh.
         downloadProgress?.Report(0);
 
@@ -70,13 +63,12 @@ internal static class RuntimeDependencyBootstrap
     {
         try
         {
-            if (
-                !WineDetection.IsRunningOnWine
-                && File.Exists(ElectronRuntime.ElectronExecutablePath)
-            )
+            // Under Wine the hook execs the native Linux Electron itself (AISP_ELECTRON_NATIVE,
+            // a DOS path it converts); on Windows it starts electron.exe (AISP_ELECTRON).
+            if (File.Exists(ElectronRuntime.ElectronExecutablePath))
             {
                 Environment.SetEnvironmentVariable(
-                    "AISP_ELECTRON",
+                    WineDetection.IsRunningOnWine ? "AISP_ELECTRON_NATIVE" : "AISP_ELECTRON",
                     Path.GetFullPath(ElectronRuntime.ElectronExecutablePath)
                 );
             }

@@ -126,8 +126,42 @@ void SetStatus(ScreenStream* stream, const wchar_t* text)
     DebugLog(L"aisp.hook: screen: %s\n", text);
 }
 
+bool UnixPathToDos(const wchar_t* unixPath, wchar_t* out, size_t outCount)
+{
+    using Convert = wchar_t*(CDECL*)(const char*);
+    HMODULE kernel32 = GetModuleHandleW(L"kernel32.dll");
+    Convert convert = kernel32 ? reinterpret_cast<Convert>(GetProcAddress(kernel32, "wine_get_dos_file_name")) : nullptr;
+    if (!convert)
+        return false;
+    char utf8[1024] = {};
+    if (!WideCharToMultiByte(CP_UTF8, 0, unixPath, -1, utf8, sizeof(utf8), nullptr, nullptr))
+        return false;
+    wchar_t* dos = convert(utf8);
+    if (!dos)
+        return false;
+    const bool ok = SUCCEEDED(StringCchCopyW(out, outCount, dos));
+    HeapFree(GetProcessHeap(), 0, dos);
+    return ok;
+}
+
+bool DosPathToUnix(const wchar_t* dosPath, wchar_t* out, size_t outCount)
+{
+    using Convert = char*(CDECL*)(const wchar_t*);
+    HMODULE kernel32 = GetModuleHandleW(L"kernel32.dll");
+    Convert convert = kernel32 ? reinterpret_cast<Convert>(GetProcAddress(kernel32, "wine_get_unix_file_name")) : nullptr;
+    if (!convert)
+        return false;
+    char* unix = convert(dosPath);
+    if (!unix)
+        return false;
+    const bool ok = MultiByteToWideChar(CP_UTF8, 0, unix, -1, out, static_cast<int>(outCount)) != 0;
+    HeapFree(GetProcessHeap(), 0, unix);
+    return ok;
+}
+
 // The tool path from the environment variable or [tools] key, else `fallback` (then
-// `altFallback`); a relative path is taken from the game directory.
+// `altFallback`); a relative path is taken from the game directory. Under Wine a Unix path
+// (/home/...) is accepted too.
 namespace
 {
 bool FillToolPath(const wchar_t* path, wchar_t* out, size_t outCount)
@@ -135,6 +169,8 @@ bool FillToolPath(const wchar_t* path, wchar_t* out, size_t outCount)
     if (!path || !path[0])
         return false;
     const bool absolute = path[0] == L'\\' || path[0] == L'/' || (path[0] && path[1] == L':');
+    if (path[0] == L'/' && UnixPathToDos(path, out, outCount))
+        return true;
     if (absolute)
         return SUCCEEDED(StringCchCopyW(out, outCount, path));
     return BuildGameFilePath(path, out, outCount);

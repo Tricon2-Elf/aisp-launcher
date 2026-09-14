@@ -1,7 +1,7 @@
 // Off-screen browser source: electron:<http(s) url>, a window in the game's shared Electron
-// (browser.cpp, StartElectronSession). On Windows that is aisp.launch.data\electron\electron.exe over named
-// pipes. On Wine the hook listens on loopback TCP and aisp.electron/host.js starts a stock
-// native Electron with the same app — Wine named pipes are not a Unix socket a Linux Node can
+// (browser.cpp, StartElectronSession). On Windows that is aisp.launch.data\electron\electron.exe
+// over named pipes. On Wine the hook listens on loopback TCP and execs a stock native Linux
+// Electron ([tools] electron_native) with the same app — Wine named pipes are not a Unix socket it could
 // connect to. Paint is latest-frame BGRA on the framed channel, which also carries the
 // page's title (kept as the stream's media title, for the primary page); live
 // scroll/scale/mute/gain on control.

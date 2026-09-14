@@ -33,7 +33,7 @@ internal static class WineUnix
         }
 
         throw new InvalidOperationException(
-            $"Could not map '{full}' to a Unix path for the native Electron broker."
+            $"Could not map '{full}' to a Unix path for the native Electron."
         );
     }
 
@@ -54,7 +54,7 @@ internal static class WineUnix
         if (!File.Exists(startExe))
         {
             throw new InvalidOperationException(
-                "Wine start.exe was not found; cannot launch the native Electron broker."
+                "Wine start.exe was not found; cannot run a Unix program."
             );
         }
 
