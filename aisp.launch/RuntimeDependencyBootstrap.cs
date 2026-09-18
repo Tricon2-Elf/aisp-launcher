@@ -3,7 +3,7 @@ namespace aisp.launch;
 internal sealed class RuntimeDependencies
 {
     public required string ElectronPath { get; init; }
-    public required MediaTools MediaTools { get; init; }
+    public MediaTools? MediaTools { get; init; }
 }
 
 internal static class RuntimeDependencyBootstrap
@@ -15,8 +15,13 @@ internal static class RuntimeDependencyBootstrap
         try
         {
             return !ElectronRuntime.IsInstalled()
-                || MediaToolsResolver.TryFindExisting() is null
-                || MediaToolsResolver.TryFindYtdlp() is null;
+                || (
+                    RuntimeDataPaths.SupportsMediaTools
+                    && (
+                        MediaToolsResolver.TryFindExisting() is null
+                        || MediaToolsResolver.TryFindYtdlp() is null
+                    )
+                );
         }
         catch (PlatformNotSupportedException)
         {
@@ -38,12 +43,15 @@ internal static class RuntimeDependencyBootstrap
             .EnsureInstalledAsync(http, status, downloadProgress, cancellationToken)
             .ConfigureAwait(false);
 
-        // Reset progress between large downloads so the UI bar starts fresh.
-        downloadProgress?.Report(0);
-
-        var media = await MediaToolsResolver
-            .EnsureInstalledAsync(http, status, downloadProgress, cancellationToken)
-            .ConfigureAwait(false);
+        MediaTools? media = null;
+        if (RuntimeDataPaths.SupportsMediaTools)
+        {
+            // Reset progress between large downloads so the UI bar starts fresh.
+            downloadProgress?.Report(0);
+            media = await MediaToolsResolver
+                .EnsureInstalledAsync(http, status, downloadProgress, cancellationToken)
+                .ConfigureAwait(false);
+        }
 
         var result = new RuntimeDependencies
         {
@@ -71,6 +79,16 @@ internal static class RuntimeDependencyBootstrap
                     WineDetection.IsRunningOnWine ? "AISP_ELECTRON_NATIVE" : "AISP_ELECTRON",
                     Path.GetFullPath(ElectronRuntime.ElectronExecutablePath)
                 );
+            }
+
+            // Native Linux Electron works in either Wine prefix. The Windows media
+            // bundles require a 64-bit OS/prefix, even though the launcher itself is x86.
+            if (!RuntimeDataPaths.SupportsMediaTools)
+            {
+                Environment.SetEnvironmentVariable("AISP_STREAMLINK", null);
+                Environment.SetEnvironmentVariable("AISP_FFMPEG", null);
+                Environment.SetEnvironmentVariable("AISP_YTDLP", null);
+                return;
             }
 
             var media = Current?.MediaTools ?? MediaToolsResolver.TryFindExisting();

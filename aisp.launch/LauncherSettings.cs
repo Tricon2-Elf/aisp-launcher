@@ -91,10 +91,20 @@ public sealed class LauncherSettings
         File.WriteAllText(path, JsonSerializer.Serialize(this, JsonOptions));
     }
 
-    public EnvironmentSettings GetEnvironment(GameEnvironment environment) =>
-        Environments.TryGetValue(environment.ToString(), out var settings)
-            ? settings
-            : new EnvironmentSettings();
+    public EnvironmentSettings GetEnvironment(GameEnvironment environment)
+    {
+        var name = environment.ToString();
+        if (Environments.TryGetValue(name, out var settings))
+            return settings;
+
+        foreach (var entry in Environments)
+        {
+            if (string.Equals(entry.Key, name, StringComparison.OrdinalIgnoreCase))
+                return entry.Value;
+        }
+
+        return new EnvironmentSettings();
+    }
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {

@@ -23,19 +23,22 @@ internal static class RuntimeDataPaths
     public static string MediaPlatformDirectory =>
         Path.Combine(DataRoot, MediaDirectoryName, DetectPlatform().CacheKey);
 
+    // This is the Windows OS/prefix capability, not the x86 launcher's process
+    // architecture or the Linux host's architecture. Native Electron is independent.
+    public static bool SupportsMediaTools =>
+        !OperatingSystem.IsWindows() || Environment.Is64BitOperatingSystem;
+
     public static RuntimePlatform DetectPlatform()
     {
         var arch = RuntimeInformation.OSArchitecture;
         if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
         {
             // Streamlink Windows portable builds are x64; ARM64 Windows can run them via emulation.
-            if (
-                arch
-                is Architecture.X64
-                    or Architecture.Arm64
-                    or Architecture.X86
-            )
+            if (arch is Architecture.X64 or Architecture.Arm64)
                 return new RuntimePlatform("windows", "x86_64");
+
+            if (arch == Architecture.X86)
+                return new RuntimePlatform("windows", "x86");
 
             throw new PlatformNotSupportedException(
                 $"Automatic runtime downloads do not support Windows architecture {arch}."
