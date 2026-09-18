@@ -9,6 +9,11 @@ public sealed class LauncherSettings
     public const string DefaultGameExecutable = "ai sp@ce.exe";
     public const string DefaultGitHubRepo = "Tricon2-Elf/aisp-launcher";
 
+    /// <summary>
+    /// CalVer release number of the launcher that last wrote this file (YYYY.MM.DD.N, or dev).
+    /// </summary>
+    public string Version { get; set; } = LaunchVersion.Display;
+
     public string WebsiteUrl { get; set; } = DefaultWebsiteUrl;
 
     public string GameExecutable { get; set; } = DefaultGameExecutable;
@@ -79,14 +84,21 @@ public sealed class LauncherSettings
     public static LauncherSettings LoadOrCreate()
     {
         var path = GetPath();
-        if (!File.Exists(path))
+        if (!File.Exists(path) || !FileHasVersion(File.ReadAllText(path)))
         {
             var defaults = new LauncherSettings();
             defaults.Save(path);
             return defaults;
         }
 
-        return Load(path);
+        var settings = Load(path);
+        if (!string.Equals(settings.Version, LaunchVersion.Display, StringComparison.Ordinal))
+        {
+            settings.Version = LaunchVersion.Display;
+            settings.Save(path);
+        }
+
+        return settings;
     }
 
     public static LauncherSettings Load(string path)
@@ -96,10 +108,27 @@ public sealed class LauncherSettings
             ?? new LauncherSettings();
     }
 
+    private static bool FileHasVersion(string json)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            return doc.RootElement.ValueKind == JsonValueKind.Object
+                && doc.RootElement.TryGetProperty("version", out var version)
+                && version.ValueKind == JsonValueKind.String
+                && !string.IsNullOrWhiteSpace(version.GetString());
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
     public void Save() => Save(GetPath());
 
     public void Save(string path)
     {
+        Version = LaunchVersion.Display;
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         File.WriteAllText(path, JsonSerializer.Serialize(this, JsonOptions));
     }
