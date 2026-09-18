@@ -37,7 +37,7 @@ public sealed class GameLauncher(LauncherSettings settings)
                 WorkingDirectory = gameDirectory,
             };
 
-            if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows) && Settings.UseLocaleReplacer)
+            if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows) && Settings.UseEnhancements)
             {
                 var hookDll = ResolveExecutablePath(LocaleHookLibrary);
                 if (hookDll is null)

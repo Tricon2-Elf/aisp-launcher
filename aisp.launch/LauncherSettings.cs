@@ -14,10 +14,23 @@ public sealed class LauncherSettings
     public string GameExecutable { get; set; } = DefaultGameExecutable;
 
     /// <summary>
-    /// When true on Windows, launcher injects aisp.hook.dll into the game process
-    /// to emulate Japanese ACP/locale without external locale emulator tools.
+    /// When true on Windows, launcher injects aisp.hook.dll into the game process.
     /// </summary>
-    public bool UseLocaleReplacer { get; set; } = true;
+    public bool UseEnhancements { get; set; } = true;
+
+    /// <summary>
+    /// Reads the old launcher.settings.json key so existing files keep their choice.
+    /// </summary>
+    [JsonPropertyName("useLocaleReplacer")]
+    public bool? UseLocaleReplacer
+    {
+        get => null;
+        set
+        {
+            if (value is bool flag)
+                UseEnhancements = flag;
+        }
+    }
 
     /// <summary>
     /// GitHub owner/repo that hosts launcher Releases (e.g. Tricon2-Elf/aisp-launcher).

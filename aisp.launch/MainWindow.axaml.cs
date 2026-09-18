@@ -27,10 +27,10 @@ public partial class MainWindow : Window
             0,
             2
         );
-        LocaleReplacerCheckBox.IsChecked = LauncherBootstrap.Settings.UseLocaleReplacer;
-        LocaleReplacerCheckBox.IsEnabled = RuntimeInformation.IsOSPlatform(OSPlatform.Windows);
-        if (!LocaleReplacerCheckBox.IsEnabled)
-            LocaleReplacerCheckBox.Content = "Use Locale Replacer (Windows only)";
+        EnhancementsCheckBox.IsChecked = LauncherBootstrap.Settings.UseEnhancements;
+        EnhancementsCheckBox.IsEnabled = RuntimeInformation.IsOSPlatform(OSPlatform.Windows);
+        if (!EnhancementsCheckBox.IsEnabled)
+            EnhancementsCheckBox.Content = "Use Enhancements (Windows only)";
         AttachWebsitePane(_gameLauncher.Settings.WebsiteUrl);
 
         Opened += OnOpened;
@@ -317,7 +317,7 @@ public partial class MainWindow : Window
 
         var environment = (GameEnvironment)EnvironmentComboBox.SelectedIndex;
         LauncherBootstrap.Settings.SelectedEnvironment = environment;
-        LauncherBootstrap.Settings.UseLocaleReplacer = LocaleReplacerCheckBox.IsChecked is true;
+        LauncherBootstrap.Settings.UseEnhancements = EnhancementsCheckBox.IsChecked is true;
         LauncherBootstrap.Settings.Save();
 
         var result = _gameLauncher.TryLaunch(environment);
