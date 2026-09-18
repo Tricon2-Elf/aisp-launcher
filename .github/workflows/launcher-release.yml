@@ -2,6 +2,15 @@ name: Release Launcher
 
 on:
   workflow_dispatch:
+    inputs:
+      website_url:
+        description: Default in-app website URL
+        type: string
+        default: https://aisp.moe
+      github_repo:
+        description: GitHub owner/repo for launcher updates
+        type: string
+        default: Tricon2-Elf/aisp-launcher
 
 concurrency:
   group: launcher-release
@@ -81,6 +90,8 @@ jobs:
           -p:PublishProfile=win-x86
           -p:InformationalVersion=${{ needs.calver.outputs.version }}
           -p:Version=${{ needs.calver.outputs.version }}
+          -p:DefaultWebsiteUrl=${{ inputs.website_url }}
+          -p:DefaultGitHubRepo=${{ inputs.github_repo }}
 
       - name: Download hook DLL
         uses: actions/download-artifact@v4

@@ -9,7 +9,20 @@
     <AssemblyName>aisp.launch</AssemblyName>
     <InformationalVersion Condition="'$(InformationalVersion)' == ''">dev</InformationalVersion>
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+    <DefaultWebsiteUrl Condition="'$(DefaultWebsiteUrl)' == ''">https://aisp.moe</DefaultWebsiteUrl>
+    <DefaultGitHubRepo Condition="'$(DefaultGitHubRepo)' == ''">Tricon2-Elf/aisp-launcher</DefaultGitHubRepo>
   </PropertyGroup>
+
+  <ItemGroup>
+    <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+      <_Parameter1>DefaultWebsiteUrl</_Parameter1>
+      <_Parameter2>$(DefaultWebsiteUrl)</_Parameter2>
+    </AssemblyAttribute>
+    <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+      <_Parameter1>DefaultGitHubRepo</_Parameter1>
+      <_Parameter2>$(DefaultGitHubRepo)</_Parameter2>
+    </AssemblyAttribute>
+  </ItemGroup>
 
   <!-- Used when publishing with -p:PublishProfile=win-x86 -->
   <PropertyGroup Condition="'$(PublishSingleFile)' == 'true'">

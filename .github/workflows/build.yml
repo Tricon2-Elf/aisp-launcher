@@ -52,6 +52,8 @@ jobs:
           dotnet publish aisp.launch/aisp.launch.csproj
           -c Release
           -p:PublishProfile=win-x86
+          -p:DefaultWebsiteUrl=${{ vars.AISP_WEBSITE_URL || 'https://aisp.moe' }}
+          -p:DefaultGitHubRepo=${{ vars.AISP_GITHUB_REPO || 'Tricon2-Elf/aisp-launcher' }}
 
       - name: Download hook DLL
         uses: actions/download-artifact@v4

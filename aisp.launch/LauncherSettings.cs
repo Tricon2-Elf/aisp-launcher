@@ -5,9 +5,11 @@ namespace aisp.launch;
 
 public sealed class LauncherSettings
 {
-    public const string DefaultWebsiteUrl = "https://aisp.moe";
+    public static string DefaultWebsiteUrl => LaunchDefaults.WebsiteUrl;
+
     public const string DefaultGameExecutable = "ai sp@ce.exe";
-    public const string DefaultGitHubRepo = "Tricon2-Elf/aisp-launcher";
+
+    public static string DefaultGitHubRepo => LaunchDefaults.GitHubRepo;
 
     /// <summary>
     /// CalVer release number of the launcher that last wrote this file (YYYY.MM.DD.N, or dev).
