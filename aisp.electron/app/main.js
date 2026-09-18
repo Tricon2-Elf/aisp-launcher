@@ -87,8 +87,7 @@ const singleUrl = argValue("--url", "");
 // app announces itself as the first framed message on every video channel so a stale copy shows
 // up in aisp.screen.log.
 const PROTOCOL = 2;
-const APP_VERSION = `aisp.electron app 2026-09-09a (protocol ${PROTOCOL})`;
-const wine = argInt("--wine", 0) ? 1 : 0;
+const APP_VERSION = `aisp.electron app 2026-09-14a (protocol ${PROTOCOL})`;
 
 if (!hubName && !singleUrl) {
   log("missing --hub (or --url)");
@@ -118,10 +117,9 @@ app.commandLine.appendSwitch("log-level", "3");
 app.disableHardwareAcceleration();
 app.commandLine.appendSwitch("disable-gpu");
 app.commandLine.appendSwitch("disable-gpu-compositing");
-if (wine || process.platform !== "win32") {
-  // Wine-in-process Chromium dies; native Linux on Xvfb has no usable GPU process.
-  // --no-sandbox must also be on the argv (host.js) because the SUID helper check
-  // runs before this file.
+if (process.platform !== "win32") {
+  // Native Linux on Xvfb has no usable GPU process. --no-sandbox must also be on the argv
+  // (the hook passes it) because the SUID helper check runs before this file.
   app.commandLine.appendSwitch("no-sandbox");
   app.commandLine.appendSwitch("disable-gpu-sandbox");
   app.commandLine.appendSwitch("disable-dev-shm-usage");

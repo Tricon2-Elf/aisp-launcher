@@ -66,18 +66,16 @@ void SetElectronTitle(ScreenStream* stream, const wchar_t* title)
     }
 }
 
-// aisp.launch.data\electron\electron.exe ([tools] electron), with the app at resources\app
+// Windows: aisp.launch.data\electron\electron.exe ([tools] electron). Wine: the native Linux
+// Electron ([tools] electron_native, aisp.launch.data\electron-linux\electron as the launcher
+// installs it, or a linux archive unpacked beside the game). The app is at resources\app
 // (launcher bootstrap) or a sibling app\ (Wine / install-electron-runtime.sh).
-bool ResolveElectronPaths(wchar_t* browser, size_t browserCount, wchar_t* appPath, size_t appCount, wchar_t* error, size_t errorCount)
+bool ResolveElectronPaths(bool native, wchar_t* browser, size_t browserCount, wchar_t* appPath, size_t appCount, wchar_t* error, size_t errorCount)
 {
-    if (!ToolPath(
-            L"AISP_ELECTRON",
-            L"electron",
-            kElectronFallback,
-            kElectronFallbackLegacy,
-            browser,
-            browserCount
-        ))
+    const bool found = native
+        ? ToolPath(L"AISP_ELECTRON_NATIVE", L"electron_native", kElectronNativeFallback, kElectronNativeFallbackLegacy, browser, browserCount)
+        : ToolPath(L"AISP_ELECTRON", L"electron", kElectronFallback, kElectronFallbackLegacy, browser, browserCount);
+    if (!found)
     {
         if (error)
             StringCchPrintfW(error, errorCount, L"browser host not found: %s", browser);
@@ -240,64 +238,21 @@ SOCKET AcceptLoopback(SOCKET listenSock, volatile LONG* stop)
     return INVALID_SOCKET;
 }
 
-bool RequestNativeElectron(const char* line, char* error, size_t errorCount)
+// Wine: starts a Unix program. CreateProcessW execs a non-PE file natively, outside wineserver:
+// no process handle or id comes back and its stdio is the null device, but the child keeps the
+// Unix environment (DISPLAY included) and gets argv split by Windows quoting rules. Its life is
+// its own: the app quits when the hub channel closes.
+bool StartNativeProcess(wchar_t* commandLine)
 {
-    wchar_t spec[64] = {};
-    // Session state of the Wine runner, not a setting: environment only.
-    if (GetEnvironmentVariableW(L"AISP_ELECTRON_NATIVE", spec, 64) == 0 || !spec[0])
-        StringCchCopyW(spec, 64, L"127.0.0.1:18764");
-    char host[32] = "127.0.0.1";
-    int port = 18764;
-    char utf[64] = {};
-    WideCharToMultiByte(CP_UTF8, 0, spec, -1, utf, 64, nullptr, nullptr);
-    if (char* colon = std::strrchr(utf, ':'))
-    {
-        *colon = 0;
-        if (utf[0])
-            StringCchCopyA(host, 32, utf);
-        port = atoi(colon + 1);
-    }
-    SOCKET sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-    if (sock == INVALID_SOCKET)
-    {
-        StringCchCopyA(error, errorCount, "native electron: socket failed");
+    STARTUPINFOW startup = {};
+    startup.cb = sizeof(startup);
+    PROCESS_INFORMATION info = {};
+    if (!CreateProcessW(nullptr, commandLine, nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, nullptr, &startup, &info))
         return false;
-    }
-    sockaddr_in addr = {};
-    addr.sin_family = AF_INET;
-    addr.sin_port = htons(static_cast<u_short>(port));
-    addr.sin_addr.s_addr = inet_addr(host);
-    if (connect(sock, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != 0)
-    {
-        StringCchCopyA(error, errorCount, "native electron: broker not listening (start aisp.electron/host.js)");
-        closesocket(sock);
-        return false;
-    }
-    const int length = static_cast<int>(std::strlen(line));
-    if (send(sock, line, length, 0) != length)
-    {
-        StringCchCopyA(error, errorCount, "native electron: send failed");
-        closesocket(sock);
-        return false;
-    }
-    char reply[256] = {};
-    int got = 0;
-    while (got < static_cast<int>(sizeof(reply) - 1))
-    {
-        const int n = recv(sock, reply + got, static_cast<int>(sizeof(reply) - 1 - got), 0);
-        if (n <= 0)
-            break;
-        got += n;
-        reply[got] = 0;
-        if (std::strchr(reply, '\n'))
-            break;
-    }
-    closesocket(sock);
-    if (std::strncmp(reply, "ok", 2) != 0)
-    {
-        StringCchPrintfA(error, errorCount, "native electron: %s", reply[0] ? reply : "empty reply");
-        return false;
-    }
+    if (info.hThread)
+        CloseHandle(info.hThread);
+    if (info.hProcess)
+        CloseHandle(info.hProcess);
     return true;
 }
 
@@ -325,13 +280,13 @@ SOCKET AcceptLoopbackFor(SOCKET listenSock, DWORD waitMs)
 // The one Electron of this game: every screen (the primary pages and the electron: sources) is a
 // window in it, opened with a line on the hub channel. Started by the first screen that needs
 // it, in the job so it ends with the game (Windows) or when the hub channel closes (Wine, where
-// the native broker spawns it). A hub whose process is gone or whose channel breaks is dropped
-// and the next screen starts a fresh one.
+// it is a native process Wine hands out no handle for). A hub whose process is gone or whose
+// channel breaks is dropped and the next screen starts a fresh one.
 struct ElectronHub
 {
     CRITICAL_SECTION lock;
     bool lockReady = false;
-    HANDLE process = nullptr; // Windows: the host process; Wine: none (the broker's child)
+    HANDLE process = nullptr; // Windows: the host process; Wine: none (a native child)
     HANDLE control = nullptr; // the hub channel, `open` lines go here
     bool tcp = false;
     LONG nextScreenId = 0;
@@ -388,6 +343,19 @@ bool EnsureHub(wchar_t* error, size_t errorCount)
     const bool tcp = IsRunningOnWine();
     if (tcp)
     {
+        // Native Linux Electron with the same app, over loopback TCP: Wine named pipes are not
+        // a Unix socket it could connect to. --no-sandbox must be on argv (chrome-sandbox is
+        // not setuid in an unpacked archive; the check runs before the app's own switch).
+        wchar_t browser[MAX_PATH] = {}, appPath[MAX_PATH] = {};
+        if (!ResolveElectronPaths(true, browser, MAX_PATH, appPath, MAX_PATH, error, errorCount))
+            return false;
+        wchar_t browserUnix[1024] = {}, appUnix[1024] = {};
+        if (!DosPathToUnix(browser, browserUnix, 1024) || !DosPathToUnix(appPath, appUnix, 1024))
+        {
+            if (error)
+                StringCchCopyW(error, errorCount, L"browser: no unix path for the native host");
+            return false;
+        }
         int port = 0;
         SOCKET listenSock = ListenLoopback(&port);
         if (listenSock == INVALID_SOCKET)
@@ -396,14 +364,16 @@ bool EnsureHub(wchar_t* error, size_t errorCount)
                 StringCchCopyW(error, errorCount, L"browser: tcp listen failed");
             return false;
         }
-        char line[64] = {};
-        StringCchPrintfA(line, 64, "hub 127.0.0.1:%d\n", port);
-        char nativeError[256] = {};
-        if (!RequestNativeElectron(line, nativeError, 256))
+        wchar_t command[2200] = {};
+        StringCchPrintfW(command, 2200, L"\"%s\" --no-sandbox \"%s\" --hub=127.0.0.1:%d", browserUnix, appUnix, port);
+        char note[2300] = {};
+        StringCchPrintfA(note, 2300, "browser host: %ls\r\n", command);
+        LogLine(note);
+        if (!StartNativeProcess(command))
         {
             closesocket(listenSock);
             if (error)
-                MultiByteToWideChar(CP_UTF8, 0, nativeError, -1, error, static_cast<int>(errorCount));
+                StringCchPrintfW(error, errorCount, L"browser host failed to start (%lu): %s", static_cast<unsigned long>(GetLastError()), browserUnix);
             return false;
         }
         SOCKET hub = AcceptLoopbackFor(listenSock, 15000);
@@ -411,7 +381,7 @@ bool EnsureHub(wchar_t* error, size_t errorCount)
         if (hub == INVALID_SOCKET)
         {
             if (error)
-                StringCchCopyW(error, errorCount, L"browser: the host did not connect its hub channel");
+                StringCchCopyW(error, errorCount, L"browser: the host did not connect its hub channel (see aisp.screen.log for its command line)");
             return false;
         }
         g_hub.control = reinterpret_cast<HANDLE>(hub);
@@ -421,7 +391,7 @@ bool EnsureHub(wchar_t* error, size_t errorCount)
     else
     {
         wchar_t browser[MAX_PATH] = {}, appPath[MAX_PATH] = {};
-        if (!ResolveElectronPaths(browser, MAX_PATH, appPath, MAX_PATH, error, errorCount))
+        if (!ResolveElectronPaths(false, browser, MAX_PATH, appPath, MAX_PATH, error, errorCount))
             return false;
         wchar_t hubSpec[128] = {};
         HANDLE hubListen = CreateNamedPipePair(hubSpec, 128, L"hub");

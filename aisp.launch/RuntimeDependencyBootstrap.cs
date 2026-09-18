@@ -63,10 +63,12 @@ internal static class RuntimeDependencyBootstrap
     {
         try
         {
+            // Under Wine the hook execs the native Linux Electron itself (AISP_ELECTRON_NATIVE,
+            // a DOS path it converts); on Windows it starts electron.exe (AISP_ELECTRON).
             if (File.Exists(ElectronRuntime.ElectronExecutablePath))
             {
                 Environment.SetEnvironmentVariable(
-                    "AISP_ELECTRON",
+                    WineDetection.IsRunningOnWine ? "AISP_ELECTRON_NATIVE" : "AISP_ELECTRON",
                     Path.GetFullPath(ElectronRuntime.ElectronExecutablePath)
                 );
             }
