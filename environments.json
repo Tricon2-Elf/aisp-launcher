@@ -1,0 +1,29 @@
+{
+  "stable": {
+    "authHost": "aisp.moe",
+    "authPort": 50050,
+    "bypassNicoLogin": 1,
+    "downloadHost": "game.aisp.moe",
+    "downloadPath": "ai-sp/download.php",
+    "uploadHost": "game.aisp.moe",
+    "uploadPath": "ai-sp/upload.php"
+  },
+  "dev": {
+    "authHost": "aisp.moe",
+    "authPort": 50050,
+    "bypassNicoLogin": 1,
+    "downloadHost": "game.aisp.moe",
+    "downloadPath": "ai-sp/download.php",
+    "uploadHost": "game.aisp.moe",
+    "uploadPath": "ai-sp/upload.php"
+  },
+  "local": {
+    "authHost": "127.0.0.1",
+    "authPort": 50050,
+    "bypassNicoLogin": 1,
+    "downloadHost": "127.0.0.1",
+    "downloadPath": "ai-sp/download.php",
+    "uploadHost": "127.0.0.1",
+    "uploadPath": "ai-sp/upload.php"
+  }
+}
