@@ -31,6 +31,54 @@ internal static partial class ElectronRuntime
 
     public static bool IsInstalled() => File.Exists(ElectronExecutablePath);
 
+    /// <summary>
+    /// True when the Electron this host actually runs is the pinned build:
+    /// electron.exe on Windows, the Linux <c>electron</c> binary on Wine
+    /// (aisp.launch.data/electron-linux) and on a native Linux publish.
+    /// </summary>
+    public static bool IsPinnedVersionInstalled()
+    {
+        if (!IsInstalled())
+            return false;
+        var installed = TryReadInstalledVersion();
+        return installed is not null
+            && string.Equals(
+                NormalizeVersion(installed),
+                NormalizeVersion(Version),
+                StringComparison.OrdinalIgnoreCase
+            );
+    }
+
+    private static string NormalizeVersion(string version) => version.Trim().TrimStart('v', 'V');
+
+    private static string? TryReadInstalledVersion()
+    {
+        foreach (var name in new[] { "aisp-electron-version", "version" })
+        {
+            var path = Path.Combine(RuntimeDataPaths.ElectronDirectory, name);
+            if (!File.Exists(path))
+                continue;
+            try
+            {
+                var text = File.ReadAllText(path).Trim();
+                if (text.Length > 0)
+                    return text;
+            }
+            catch
+            {
+                // Unreadable stamp: treat as the wrong version so we reinstall.
+            }
+        }
+
+        return null;
+    }
+
+    private static void WriteVersionStamp() =>
+        File.WriteAllText(
+            Path.Combine(RuntimeDataPaths.ElectronDirectory, "aisp-electron-version"),
+            Version
+        );
+
     public static bool IsAppInstalled() =>
         File.Exists(Path.Combine(AppDirectory, "main.js"))
         && File.Exists(Path.Combine(AppDirectory, "package.json"));
@@ -42,9 +90,19 @@ internal static partial class ElectronRuntime
         CancellationToken cancellationToken = default
     )
     {
-        if (!IsInstalled())
+        if (!IsPinnedVersionInstalled())
+        {
+            if (IsInstalled())
+            {
+                status?.Report(
+                    UseWindowsElectronBinary
+                        ? $"Updating Electron to v{Version}…"
+                        : $"Updating Linux Electron to v{Version}…"
+                );
+            }
             await DownloadAndExtractAsync(http, status, downloadProgress, cancellationToken)
                 .ConfigureAwait(false);
+        }
 
         status?.Report("Installing Electron app…");
         EnsureAppFiles();
@@ -170,6 +228,8 @@ internal static partial class ElectronRuntime
                     $"Electron installation incomplete at '{targetDir}'."
                 );
             }
+
+            WriteVersionStamp();
         }
         finally
         {

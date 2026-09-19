@@ -14,7 +14,7 @@ internal static class RuntimeDependencyBootstrap
     {
         try
         {
-            return !ElectronRuntime.IsInstalled()
+            return !ElectronRuntime.IsPinnedVersionInstalled()
                 || MediaToolsResolver.TryFindExisting() is null
                 || MediaToolsResolver.TryFindYtdlp() is null;
         }
