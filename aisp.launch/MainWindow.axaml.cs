@@ -27,13 +27,41 @@ public partial class MainWindow : Window
             0,
             2
         );
-        EnhancementsCheckBox.IsChecked = LauncherBootstrap.Settings.UseEnhancements;
-        EnhancementsCheckBox.IsEnabled = RuntimeInformation.IsOSPlatform(OSPlatform.Windows);
-        if (!EnhancementsCheckBox.IsEnabled)
-            EnhancementsCheckBox.Content = "Use Enhancements (Windows only)";
+        BindOptions();
         AttachWebsitePane(_gameLauncher.Settings.WebsiteUrl);
 
         Opened += OnOpened;
+    }
+
+    private void BindOptions()
+    {
+        var settings = LauncherBootstrap.Settings;
+        EnhancementsCheckBox.IsChecked = settings.UseEnhancements;
+        ElectronHwAccelCheckBox.IsChecked = settings.ElectronHardwareAcceleration;
+        CheckUpdatesOnStartupCheckBox.IsChecked = settings.CheckForUpdatesOnStartup;
+
+        EnhancementsCheckBox.IsCheckedChanged += OnOptionsChanged;
+        ElectronHwAccelCheckBox.IsCheckedChanged += OnOptionsChanged;
+        CheckUpdatesOnStartupCheckBox.IsCheckedChanged += OnOptionsChanged;
+        UpdateElectronHwAccelEnabled();
+    }
+
+    private void OnOptionsChanged(object? sender, RoutedEventArgs e)
+    {
+        UpdateElectronHwAccelEnabled();
+        ApplyOptionsToSettings();
+        LauncherBootstrap.Settings.Save();
+    }
+
+    private void UpdateElectronHwAccelEnabled() =>
+        ElectronHwAccelCheckBox.IsEnabled = EnhancementsCheckBox.IsChecked is true;
+
+    private void ApplyOptionsToSettings()
+    {
+        var settings = LauncherBootstrap.Settings;
+        settings.UseEnhancements = EnhancementsCheckBox.IsChecked is true;
+        settings.ElectronHardwareAcceleration = ElectronHwAccelCheckBox.IsChecked is true;
+        settings.CheckForUpdatesOnStartup = CheckUpdatesOnStartupCheckBox.IsChecked is true;
     }
 
     private void AttachWebsitePane(string websiteUrl)
@@ -319,7 +347,7 @@ public partial class MainWindow : Window
 
         var environment = (GameEnvironment)EnvironmentComboBox.SelectedIndex;
         LauncherBootstrap.Settings.SelectedEnvironment = environment;
-        LauncherBootstrap.Settings.UseEnhancements = EnhancementsCheckBox.IsChecked is true;
+        ApplyOptionsToSettings();
         LauncherBootstrap.Settings.Save();
 
         await PromptDirectXIfMissingAsync(AppContext.BaseDirectory).ConfigureAwait(true);

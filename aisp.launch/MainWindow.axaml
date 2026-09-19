@@ -16,7 +16,7 @@
                 Padding="0,0,0,12"
                 BorderBrush="{DynamicResource ThemeBorderLowBrush}"
                 BorderThickness="0,0,0,1">
-            <Grid ColumnDefinitions="Auto,*,Auto,Auto"
+            <Grid ColumnDefinitions="Auto,*,Auto,Auto,Auto"
                   ColumnSpacing="12">
                 <ComboBox x:Name="EnvironmentComboBox"
                           Grid.Column="0"
@@ -28,21 +28,34 @@
                     <ComboBoxItem Content="Local" />
                 </ComboBox>
 
-                <CheckBox x:Name="EnhancementsCheckBox"
-                          Grid.Column="1"
-                          VerticalAlignment="Center"
-                          HorizontalAlignment="Right"
-                          Content="Use Enhancements" />
+                <Button x:Name="OptionsButton"
+                        Grid.Column="2"
+                        MinWidth="120"
+                        Padding="16,8"
+                        Content="Options">
+                    <Button.Flyout>
+                        <Flyout Placement="Bottom">
+                            <StackPanel MinWidth="240" Spacing="8">
+                                <CheckBox x:Name="EnhancementsCheckBox"
+                                          Content="Use Enhancements" />
+                                <CheckBox x:Name="ElectronHwAccelCheckBox"
+                                          Content="Electron HW Acceleration" />
+                                <CheckBox x:Name="CheckUpdatesOnStartupCheckBox"
+                                          Content="Check for updates on startup" />
+                            </StackPanel>
+                        </Flyout>
+                    </Button.Flyout>
+                </Button>
 
                 <Button x:Name="CheckUpdatesButton"
-                        Grid.Column="2"
+                        Grid.Column="3"
                         MinWidth="120"
                         Padding="16,8"
                         Content="Check for updates"
                         Click="OnCheckUpdatesClick" />
 
                 <Button x:Name="StartGameButton"
-                        Grid.Column="3"
+                        Grid.Column="4"
                         MinWidth="120"
                         Padding="16,8"
                         Content="Start Game"
