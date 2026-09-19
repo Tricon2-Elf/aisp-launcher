@@ -49,6 +49,13 @@ public sealed class LauncherSettings
     /// </summary>
     public bool CheckForUpdatesOnStartup { get; set; } = true;
 
+    /// <summary>
+    /// When true, the in-game Electron host uses GPU acceleration. The hook reads
+    /// AISP_ELECTRON_HW_ACCEL (set from this value at launch). Defaults on for
+    /// native Windows and off under Wine.
+    /// </summary>
+    public bool ElectronHardwareAcceleration { get; set; } = !WineDetection.IsRunningOnWine;
+
     public GameEnvironment SelectedEnvironment { get; set; } = GameEnvironment.Stable;
 
     public Dictionary<string, EnvironmentSettings> Environments { get; set; } =
@@ -93,8 +100,11 @@ public sealed class LauncherSettings
             return defaults;
         }
 
-        var settings = Load(path);
-        if (!string.Equals(settings.Version, LaunchVersion.Display, StringComparison.Ordinal))
+        var json = File.ReadAllText(path);
+        var settings = JsonSerializer.Deserialize<LauncherSettings>(json, JsonOptions)
+            ?? new LauncherSettings();
+        if (!string.Equals(settings.Version, LaunchVersion.Display, StringComparison.Ordinal)
+            || !FileHasProperty(json, "electronHardwareAcceleration"))
         {
             settings.Version = LaunchVersion.Display;
             settings.Save(path);
@@ -119,6 +129,20 @@ public sealed class LauncherSettings
                 && doc.RootElement.TryGetProperty("version", out var version)
                 && version.ValueKind == JsonValueKind.String
                 && !string.IsNullOrWhiteSpace(version.GetString());
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
+    private static bool FileHasProperty(string json, string name)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            return doc.RootElement.ValueKind == JsonValueKind.Object
+                && doc.RootElement.TryGetProperty(name, out _);
         }
         catch (JsonException)
         {

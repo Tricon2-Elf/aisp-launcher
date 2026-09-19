@@ -112,14 +112,26 @@ app.commandLine.appendSwitch("autoplay-policy", "no-user-gesture-required");
 app.commandLine.appendSwitch("force-device-scale-factor", "1");
 app.commandLine.appendSwitch("disable-logging");
 app.commandLine.appendSwitch("log-level", "3");
-// A hardware GPU process next to the 32-bit D3D9 client takes the game down when the
-// first in-game screen starts. Software blit is enough for the off-screen crop.
-app.disableHardwareAcceleration();
-app.commandLine.appendSwitch("disable-gpu");
-app.commandLine.appendSwitch("disable-gpu-compositing");
+function hardwareAccelEnabled() {
+  const fromArg = argInt("--hw-accel", -1);
+  if (fromArg >= 0)
+    return fromArg !== 0;
+  const env = process.env.AISP_ELECTRON_HW_ACCEL;
+  if (env === "0" || /^off|false|no$/i.test(env || ""))
+    return false;
+  if (env === "1" || /^on|true|yes$/i.test(env || ""))
+    return true;
+  return process.platform === "win32";
+}
+
+if (!hardwareAccelEnabled()) {
+  app.disableHardwareAcceleration();
+  app.commandLine.appendSwitch("disable-gpu");
+  app.commandLine.appendSwitch("disable-gpu-compositing");
+}
 if (process.platform !== "win32") {
-  // Native Linux on Xvfb has no usable GPU process. --no-sandbox must also be on the argv
-  // (the hook passes it) because the SUID helper check runs before this file.
+  // Native Linux (Wine / Xvfb): --no-sandbox must also be on the argv (the hook
+  // passes it) because the SUID helper check runs before this file.
   app.commandLine.appendSwitch("no-sandbox");
   app.commandLine.appendSwitch("disable-gpu-sandbox");
   app.commandLine.appendSwitch("disable-dev-shm-usage");

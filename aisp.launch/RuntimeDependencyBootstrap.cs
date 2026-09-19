@@ -86,6 +86,11 @@ internal static class RuntimeDependencyBootstrap
             var ytdlp = MediaToolsResolver.TryFindYtdlp();
             if (ytdlp is not null)
                 Environment.SetEnvironmentVariable("AISP_YTDLP", Path.GetFullPath(ytdlp));
+
+            Environment.SetEnvironmentVariable(
+                "AISP_ELECTRON_HW_ACCEL",
+                LauncherBootstrap.Settings.ElectronHardwareAcceleration ? "1" : "0"
+            );
         }
         catch (PlatformNotSupportedException)
         {

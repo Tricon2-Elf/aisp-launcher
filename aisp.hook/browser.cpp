@@ -334,6 +334,19 @@ void DropHub(const char* why)
     g_hub.tcp = false;
 }
 
+bool UseElectronHardwareAcceleration()
+{
+    switch (ConfigSwitch(L"AISP_ELECTRON_HW_ACCEL", L"screens", L"electron_hw_accel"))
+    {
+    case Switch::On:
+        return true;
+    case Switch::Off:
+        return false;
+    default:
+        return !IsRunningOnWine();
+    }
+}
+
 // Caller holds g_hub.lock. Starts the host if there is none, and connects its hub channel.
 bool EnsureHub(wchar_t* error, size_t errorCount)
 {
@@ -365,7 +378,28 @@ bool EnsureHub(wchar_t* error, size_t errorCount)
             return false;
         }
         wchar_t command[2200] = {};
-        StringCchPrintfW(command, 2200, L"\"%s\" --no-sandbox \"%s\" --hub=127.0.0.1:%d", browserUnix, appUnix, port);
+        if (UseElectronHardwareAcceleration())
+        {
+            StringCchPrintfW(
+                command,
+                2200,
+                L"\"%s\" --no-sandbox \"%s\" --hub=127.0.0.1:%d --hw-accel=1",
+                browserUnix,
+                appUnix,
+                port
+            );
+        }
+        else
+        {
+            StringCchPrintfW(
+                command,
+                2200,
+                L"\"%s\" --no-sandbox --disable-gpu --disable-gpu-compositing --disable-gpu-sandbox \"%s\" --hub=127.0.0.1:%d --hw-accel=0",
+                browserUnix,
+                appUnix,
+                port
+            );
+        }
         char note[2300] = {};
         StringCchPrintfA(note, 2300, "browser host: %ls\r\n", command);
         LogLine(note);
@@ -403,14 +437,21 @@ bool EnsureHub(wchar_t* error, size_t errorCount)
         }
         wchar_t command[1024] = {};
         // Chromium switches must come before the app path or Electron treats them as argv for main.js.
-        StringCchPrintfW(
-            command,
-            1024,
-            L"\"%s\" --disable-gpu --disable-gpu-compositing --disable-gpu-sandbox \"%s\" --hub=\"%s\"",
-            browser,
-            appPath,
-            hubSpec
-        );
+        if (UseElectronHardwareAcceleration())
+        {
+            StringCchPrintfW(command, 1024, L"\"%s\" \"%s\" --hub=\"%s\" --hw-accel=1", browser, appPath, hubSpec);
+        }
+        else
+        {
+            StringCchPrintfW(
+                command,
+                1024,
+                L"\"%s\" --disable-gpu --disable-gpu-compositing --disable-gpu-sandbox \"%s\" --hub=\"%s\" --hw-accel=0",
+                browser,
+                appPath,
+                hubSpec
+            );
+        }
         HANDLE process = LaunchBrowserHost(command);
         if (!process)
         {
