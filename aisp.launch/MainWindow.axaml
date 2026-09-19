@@ -21,12 +21,7 @@
                 <ComboBox x:Name="EnvironmentComboBox"
                           Grid.Column="0"
                           MinWidth="140"
-                          VerticalAlignment="Center"
-                          SelectedIndex="0">
-                    <ComboBoxItem Content="Stable" />
-                    <ComboBoxItem Content="Dev" />
-                    <ComboBoxItem Content="Local" />
-                </ComboBox>
+                          VerticalAlignment="Center" />
 
                 <Button x:Name="OptionsButton"
                         Grid.Column="2"

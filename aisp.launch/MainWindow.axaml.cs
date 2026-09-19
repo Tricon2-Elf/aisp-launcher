@@ -22,16 +22,44 @@ public partial class MainWindow : Window
         _gameLauncher = new GameLauncher(LauncherBootstrap.Settings);
         _updater = new LauncherUpdater(LauncherBootstrap.Settings);
 
-        EnvironmentComboBox.SelectedIndex = Math.Clamp(
-            (int)LauncherBootstrap.Settings.SelectedEnvironment,
-            0,
-            2
-        );
+        BindEnvironments();
         BindOptions();
         AttachWebsitePane(_gameLauncher.Settings.WebsiteUrl);
 
         Opened += OnOpened;
     }
+
+    private void BindEnvironments()
+    {
+        var settings = LauncherBootstrap.Settings;
+        var names = EnvironmentCatalog.ListVisible(settings);
+        var selected = settings.SelectedEnvironment;
+        EnvironmentComboBox.Items.Clear();
+        ComboBoxItem? match = null;
+        foreach (var name in names)
+        {
+            var item = new ComboBoxItem
+            {
+                Content = EnvironmentCatalog.DisplayName(name),
+                Tag = name,
+            };
+            EnvironmentComboBox.Items.Add(item);
+            if (
+                match is null
+                && name.Equals(selected, StringComparison.OrdinalIgnoreCase)
+            )
+                match = item;
+        }
+
+        EnvironmentComboBox.SelectedItem = match ?? EnvironmentComboBox.Items.Cast<ComboBoxItem>().FirstOrDefault();
+        if (EnvironmentComboBox.SelectedItem is ComboBoxItem chosen && chosen.Tag is string key)
+            settings.SelectedEnvironment = key;
+    }
+
+    private string? SelectedEnvironmentKey() =>
+        EnvironmentComboBox.SelectedItem is ComboBoxItem item && item.Tag is string key
+            ? key
+            : null;
 
     private void BindOptions()
     {
@@ -160,6 +188,7 @@ public partial class MainWindow : Window
         await EnvironmentCatalog
             .TryRefreshAsync(LauncherBootstrap.Settings)
             .ConfigureAwait(true);
+        BindEnvironments();
 
         try
         {
@@ -560,7 +589,16 @@ public partial class MainWindow : Window
         if (_updateInProgress)
             return;
 
-        var environment = (GameEnvironment)EnvironmentComboBox.SelectedIndex;
+        if (SelectedEnvironmentKey() is not { Length: > 0 } environment)
+        {
+            await ShowMessageAsync(
+                    "Unable to start game",
+                    "No environment is selected. Add one in environments.json or environments-override.json."
+                )
+                .ConfigureAwait(true);
+            return;
+        }
+
         LauncherBootstrap.Settings.SelectedEnvironment = environment;
         ApplyOptionsToSettings();
         LauncherBootstrap.Settings.Save();

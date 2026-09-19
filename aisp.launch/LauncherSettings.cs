@@ -69,7 +69,7 @@ public sealed class LauncherSettings
     /// </summary>
     public bool UseDgVoodoo { get; set; }
 
-    public GameEnvironment SelectedEnvironment { get; set; } = GameEnvironment.Stable;
+    public string SelectedEnvironment { get; set; } = "";
 
     public Dictionary<string, EnvironmentSettings> Environments { get; set; } =
         EnvironmentCatalog.CreateDefaults();
@@ -90,6 +90,7 @@ public sealed class LauncherSettings
         var json = File.ReadAllText(path);
         var settings = JsonSerializer.Deserialize<LauncherSettings>(json, JsonOptions)
             ?? new LauncherSettings();
+        EnvironmentCatalog.RetainOfficialKeys(settings);
         if (!string.Equals(settings.Version, LaunchVersion.Display, StringComparison.Ordinal)
             || !FileHasProperty(json, "electronHardwareAcceleration")
             || !FileHasProperty(json, "useDxvk")
@@ -148,9 +149,9 @@ public sealed class LauncherSettings
         File.WriteAllText(path, JsonSerializer.Serialize(this, JsonOptions));
     }
 
-    public EnvironmentSettings GetEnvironment(GameEnvironment environment)
+    public EnvironmentSettings GetEnvironment(string environment)
     {
-        var fallback = Environments.TryGetValue(environment.ToString(), out var settings)
+        var fallback = Environments.TryGetValue(environment, out var settings)
             ? settings
             : new EnvironmentSettings();
         return EnvironmentCatalog.Resolve(environment, fallback);

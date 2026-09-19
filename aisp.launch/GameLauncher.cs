@@ -11,7 +11,7 @@ public sealed class GameLauncher(LauncherSettings settings)
 
     public LauncherSettings Settings { get; } = settings;
 
-    public GameLaunchResult TryLaunch(GameEnvironment environment)
+    public GameLaunchResult TryLaunch(string environment)
     {
         var envSettings = Settings.GetEnvironment(environment);
         var executable = ResolveExecutablePath(Settings.GameExecutable);

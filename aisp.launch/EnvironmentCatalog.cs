@@ -1,12 +1,14 @@
+using System.Globalization;
 using System.Reflection;
 using System.Text.Json;
 
 namespace aisp.launch;
 
 /// <summary>
-/// Loads Stable/Dev/Local hosts from environments.json in the GitHub repo root.
+/// Loads environment hosts from environments.json in the GitHub repo root.
 /// The same file is embedded for offline first-run defaults. Optional
-/// aisp.launch.data/environments-override.json wins per environment / field.
+/// aisp.launch.data/environments-override.json can add or override entries.
+/// The combo list is those two sources only.
 /// </summary>
 internal static class EnvironmentCatalog
 {
@@ -27,7 +29,7 @@ internal static class EnvironmentCatalog
     };
 
     public static Dictionary<string, EnvironmentSettings> CreateDefaults() =>
-        Parse(ReadEmbedded()) ?? new Dictionary<string, EnvironmentSettings>();
+        Parse(ReadEmbedded()) ?? NewMap();
 
     public static async Task<bool> TryRefreshAsync(
         LauncherSettings settings,
@@ -47,9 +49,7 @@ internal static class EnvironmentCatalog
             if (parsed is null || parsed.Count == 0)
                 return false;
 
-            foreach (var (key, value) in parsed)
-                settings.Environments[key] = value;
-
+            settings.Environments = parsed;
             settings.Save();
             return true;
         }
@@ -59,16 +59,53 @@ internal static class EnvironmentCatalog
         }
     }
 
-    public static EnvironmentSettings Resolve(
-        GameEnvironment environment,
-        EnvironmentSettings fallback
-    )
+    public static void RetainOfficialKeys(LauncherSettings settings)
+    {
+        var official = CreateDefaults();
+        var next = NewMap();
+        foreach (var (key, value) in official)
+        {
+            next[key] = settings.Environments.TryGetValue(key, out var cached)
+                ? cached
+                : value;
+        }
+
+        settings.Environments = next;
+    }
+
+    public static IReadOnlyList<string> ListVisible(LauncherSettings settings)
+    {
+        var names = new List<string>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var key in settings.Environments.Keys)
+        {
+            if (!seen.Add(key))
+                continue;
+            names.Add(key);
+        }
+
+        foreach (var key in TryReadOverrides().Keys)
+        {
+            if (!seen.Add(key))
+                continue;
+            names.Add(key);
+        }
+
+        return names;
+    }
+
+    public static string DisplayName(string key)
+    {
+        if (string.IsNullOrWhiteSpace(key))
+            return key;
+        var text = key.Trim();
+        return char.ToUpper(text[0], CultureInfo.InvariantCulture) + text[1..];
+    }
+
+    public static EnvironmentSettings Resolve(string environment, EnvironmentSettings fallback)
     {
         var overrides = TryReadOverrides();
-        if (
-            overrides is not null
-            && overrides.TryGetValue(environment.ToString(), out var overlay)
-        )
+        if (overrides.TryGetValue(environment, out var overlay))
             return overlay.Apply(fallback);
 
         return fallback;
@@ -92,24 +129,24 @@ internal static class EnvironmentCatalog
         if (raw is null || raw.Count == 0)
             return null;
 
-        var mapped = new Dictionary<string, EnvironmentSettings>(StringComparer.Ordinal);
-        foreach (var environment in Enum.GetValues<GameEnvironment>())
+        var mapped = NewMap();
+        foreach (var (key, value) in raw)
         {
-            var match = raw.FirstOrDefault(entry =>
-                entry.Key.Equals(environment.ToString(), StringComparison.OrdinalIgnoreCase)
-            );
-            if (match.Value is null || !IsUsable(match.Value))
+            if (string.IsNullOrWhiteSpace(key) || value is null || !IsUsable(value))
                 continue;
-            mapped[environment.ToString()] = match.Value;
+            mapped[key.Trim()] = value;
         }
 
         return mapped.Count > 0 ? mapped : null;
     }
 
-    private static Dictionary<string, EnvironmentSettingsOverride>? TryReadOverrides()
+    private static Dictionary<string, EnvironmentSettingsOverride> TryReadOverrides()
     {
+        var mapped = new Dictionary<string, EnvironmentSettingsOverride>(
+            StringComparer.OrdinalIgnoreCase
+        );
         if (!File.Exists(OverridePath))
-            return null;
+            return mapped;
 
         try
         {
@@ -117,29 +154,26 @@ internal static class EnvironmentCatalog
             var raw = JsonSerializer.Deserialize<
                 Dictionary<string, EnvironmentSettingsOverride>
             >(json, JsonOptions);
-            if (raw is null || raw.Count == 0)
-                return null;
+            if (raw is null)
+                return mapped;
 
-            var mapped = new Dictionary<string, EnvironmentSettingsOverride>(
-                StringComparer.Ordinal
-            );
-            foreach (var environment in Enum.GetValues<GameEnvironment>())
+            foreach (var (key, value) in raw)
             {
-                var match = raw.FirstOrDefault(entry =>
-                    entry.Key.Equals(environment.ToString(), StringComparison.OrdinalIgnoreCase)
-                );
-                if (match.Value is null)
+                if (string.IsNullOrWhiteSpace(key) || value is null)
                     continue;
-                mapped[environment.ToString()] = match.Value;
+                mapped[key.Trim()] = value;
             }
-
-            return mapped.Count > 0 ? mapped : null;
         }
         catch (Exception ex) when (ex is JsonException or IOException)
         {
-            return null;
+            return mapped;
         }
+
+        return mapped;
     }
+
+    private static Dictionary<string, EnvironmentSettings> NewMap() =>
+        new(StringComparer.OrdinalIgnoreCase);
 
     private static bool IsUsable(EnvironmentSettings settings) =>
         !string.IsNullOrWhiteSpace(settings.AuthHost)
