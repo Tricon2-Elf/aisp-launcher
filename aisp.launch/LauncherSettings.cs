@@ -62,6 +62,14 @@ public sealed class LauncherSettings
     /// </summary>
     public bool UseDxvk { get; set; }
 
+    /// <summary>
+    /// When true, the launcher installs pinned dgVoodoo2 (v2.87.5) MS/x86 D3D9.dll
+    /// next to the game, plus dgVoodooCpl.exe and dgVoodoo.conf under aisp.launch.data.
+    /// The managed config is copied into the game directory on each launch.
+    /// Mutually exclusive with UseDxvk.
+    /// </summary>
+    public bool UseDgVoodoo { get; set; }
+
     public GameEnvironment SelectedEnvironment { get; set; } = GameEnvironment.Stable;
 
     public Dictionary<string, EnvironmentSettings> Environments { get; set; } =
@@ -111,7 +119,8 @@ public sealed class LauncherSettings
             ?? new LauncherSettings();
         if (!string.Equals(settings.Version, LaunchVersion.Display, StringComparison.Ordinal)
             || !FileHasProperty(json, "electronHardwareAcceleration")
-            || !FileHasProperty(json, "useDxvk"))
+            || !FileHasProperty(json, "useDxvk")
+            || !FileHasProperty(json, "useDgVoodoo"))
         {
             settings.Version = LaunchVersion.Display;
             settings.Save(path);

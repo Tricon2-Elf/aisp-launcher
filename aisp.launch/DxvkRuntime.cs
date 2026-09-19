@@ -55,6 +55,8 @@ internal static class DxvkRuntime
             return;
         }
 
+        DgVoodooRuntime.RemoveInstalled();
+
         status?.Report("Checking latest DXVK release…");
         var release = await http.GetReleaseAsync(LatestReleaseApi, cancellationToken)
             .ConfigureAwait(false);

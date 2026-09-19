@@ -74,5 +74,6 @@
   <ItemGroup>
     <EmbeddedResource Include="..\aisp.electron\app\main.js" LogicalName="aisp.electron.app.main.js" />
     <EmbeddedResource Include="..\aisp.electron\app\package.json" LogicalName="aisp.electron.app.package.json" />
+    <EmbeddedResource Include="..\aisp.hook\dgVoodoo.conf" LogicalName="aisp.hook.dgVoodoo.conf" />
   </ItemGroup>
 </Project>

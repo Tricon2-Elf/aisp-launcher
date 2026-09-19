@@ -17,7 +17,8 @@ internal static class RuntimeDependencyBootstrap
             return !ElectronRuntime.IsPinnedVersionInstalled()
                 || MediaToolsResolver.TryFindExisting() is null
                 || MediaToolsResolver.TryFindYtdlp() is null
-                || DxvkRuntime.NeedsDownload();
+                || DxvkRuntime.NeedsDownload()
+                || DgVoodooRuntime.NeedsDownload();
         }
         catch (PlatformNotSupportedException)
         {
@@ -50,6 +51,13 @@ internal static class RuntimeDependencyBootstrap
         {
             downloadProgress?.Report(0);
             await DxvkRuntime
+                .EnsureInstalledAsync(http, status, downloadProgress, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        else if (LauncherBootstrap.Settings.UseDgVoodoo)
+        {
+            downloadProgress?.Report(0);
+            await DgVoodooRuntime
                 .EnsureInstalledAsync(http, status, downloadProgress, cancellationToken)
                 .ConfigureAwait(false);
         }

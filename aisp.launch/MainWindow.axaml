@@ -41,7 +41,9 @@
                                 <CheckBox x:Name="ElectronHwAccelCheckBox"
                                           Content="Electron HW Acceleration" />
                                 <CheckBox x:Name="UseDxvkCheckBox"
-                                          Content="Use Vulkan (Uses DXVK)" />
+                                          Content="Use Vulkan (DXVK)" />
+                                <CheckBox x:Name="UseDgVoodooCheckBox"
+                                          Content="Use Modern DirectX (dgVoodoo2)" />
                                 <CheckBox x:Name="CheckUpdatesOnStartupCheckBox"
                                           Content="Check for updates on startup" />
                             </StackPanel>

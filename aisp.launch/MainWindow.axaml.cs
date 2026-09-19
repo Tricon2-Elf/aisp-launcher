@@ -39,11 +39,13 @@ public partial class MainWindow : Window
         EnhancementsCheckBox.IsChecked = settings.UseEnhancements;
         ElectronHwAccelCheckBox.IsChecked = settings.ElectronHardwareAcceleration;
         UseDxvkCheckBox.IsChecked = settings.UseDxvk;
+        UseDgVoodooCheckBox.IsChecked = settings.UseDgVoodoo;
         CheckUpdatesOnStartupCheckBox.IsChecked = settings.CheckForUpdatesOnStartup;
 
         EnhancementsCheckBox.IsCheckedChanged += OnOptionsChanged;
         ElectronHwAccelCheckBox.IsCheckedChanged += OnOptionsChanged;
         UseDxvkCheckBox.IsCheckedChanged += OnOptionsChanged;
+        UseDgVoodooCheckBox.IsCheckedChanged += OnOptionsChanged;
         CheckUpdatesOnStartupCheckBox.IsCheckedChanged += OnOptionsChanged;
         UpdateElectronHwAccelEnabled();
     }
@@ -52,14 +54,31 @@ public partial class MainWindow : Window
     {
         var settings = LauncherBootstrap.Settings;
         var wasDxvk = settings.UseDxvk;
+        var wasDgVoodoo = settings.UseDgVoodoo;
+
+        if (
+            sender == UseDxvkCheckBox
+            && UseDxvkCheckBox.IsChecked is true
+            && UseDgVoodooCheckBox.IsChecked is true
+        )
+            SetCheckBoxWithoutNotify(UseDgVoodooCheckBox, false);
+        if (
+            sender == UseDgVoodooCheckBox
+            && UseDgVoodooCheckBox.IsChecked is true
+            && UseDxvkCheckBox.IsChecked is true
+        )
+            SetCheckBoxWithoutNotify(UseDxvkCheckBox, false);
+
         UpdateElectronHwAccelEnabled();
         ApplyOptionsToSettings();
         settings.Save();
 
-        if (settings.UseDxvk == wasDxvk)
-            return;
+        if (wasDxvk && !settings.UseDxvk)
+            DxvkRuntime.RemoveInstalled();
+        if (wasDgVoodoo && !settings.UseDgVoodoo)
+            DgVoodooRuntime.RemoveInstalled();
 
-        if (settings.UseDxvk)
+        if (settings.UseDxvk && !wasDxvk)
         {
             try
             {
@@ -67,18 +86,33 @@ public partial class MainWindow : Window
             }
             catch (Exception ex)
             {
-                UseDxvkCheckBox.IsCheckedChanged -= OnOptionsChanged;
-                UseDxvkCheckBox.IsChecked = false;
-                UseDxvkCheckBox.IsCheckedChanged += OnOptionsChanged;
+                SetCheckBoxWithoutNotify(UseDxvkCheckBox, false);
                 settings.UseDxvk = false;
                 settings.Save();
                 await ShowMessageAsync("DXVK setup failed", ex.Message).ConfigureAwait(true);
             }
-
-            return;
         }
+        else if (settings.UseDgVoodoo && !wasDgVoodoo)
+        {
+            try
+            {
+                await EnsureDgVoodooWithUiAsync().ConfigureAwait(true);
+            }
+            catch (Exception ex)
+            {
+                SetCheckBoxWithoutNotify(UseDgVoodooCheckBox, false);
+                settings.UseDgVoodoo = false;
+                settings.Save();
+                await ShowMessageAsync("dgVoodoo setup failed", ex.Message).ConfigureAwait(true);
+            }
+        }
+    }
 
-        DxvkRuntime.RemoveInstalled();
+    private void SetCheckBoxWithoutNotify(CheckBox box, bool value)
+    {
+        box.IsCheckedChanged -= OnOptionsChanged;
+        box.IsChecked = value;
+        box.IsCheckedChanged += OnOptionsChanged;
     }
 
     private void UpdateElectronHwAccelEnabled() =>
@@ -90,6 +124,7 @@ public partial class MainWindow : Window
         settings.UseEnhancements = EnhancementsCheckBox.IsChecked is true;
         settings.ElectronHardwareAcceleration = ElectronHwAccelCheckBox.IsChecked is true;
         settings.UseDxvk = UseDxvkCheckBox.IsChecked is true;
+        settings.UseDgVoodoo = UseDgVoodooCheckBox.IsChecked is true;
         settings.CheckForUpdatesOnStartup = CheckUpdatesOnStartupCheckBox.IsChecked is true;
     }
 
@@ -299,6 +334,77 @@ public partial class MainWindow : Window
         }
     }
 
+    private async Task EnsureDgVoodooWithUiAsync()
+    {
+        if (DgVoodooRuntime.IsInstalled())
+            return;
+
+        var statusText = new TextBlock
+        {
+            Text = $"Checking dgVoodoo {DgVoodooRuntime.Version}…",
+            TextWrapping = Avalonia.Media.TextWrapping.Wrap,
+        };
+        var progressBar = new ProgressBar
+        {
+            Minimum = 0,
+            Maximum = 100,
+            Value = 0,
+            Height = 8,
+        };
+        var dialog = new Window
+        {
+            Title = "Downloading dgVoodoo",
+            Width = 420,
+            SizeToContent = SizeToContent.Height,
+            CanResize = false,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner,
+            Content = new StackPanel
+            {
+                Margin = new Thickness(20),
+                Spacing = 16,
+                Children = { statusText, progressBar },
+            },
+        };
+
+        var status = new Progress<string>(message => statusText.Text = message);
+        var downloadProgress = new Progress<double>(fraction =>
+        {
+            progressBar.Value = Math.Clamp(fraction * 100, 0, 100);
+        });
+
+        StartGameButton.IsEnabled = false;
+        OptionsButton.IsEnabled = false;
+        using var http = new RuntimeHttpClient();
+        var ensureTask = DgVoodooRuntime.EnsureInstalledAsync(http, status, downloadProgress);
+        var dialogTask = dialog.ShowDialog(this);
+
+        try
+        {
+            await ensureTask.ConfigureAwait(true);
+            dialog.Close();
+            await dialogTask.ConfigureAwait(true);
+        }
+        catch
+        {
+            dialog.Close();
+            try
+            {
+                await dialogTask.ConfigureAwait(true);
+            }
+            catch
+            {
+                // Dialog may already be closed.
+            }
+
+            throw;
+        }
+        finally
+        {
+            StartGameButton.IsEnabled = !_updateInProgress;
+            OptionsButton.IsEnabled = true;
+        }
+    }
+
     private async void OnCheckUpdatesClick(object? sender, RoutedEventArgs e)
     {
         if (_updateInProgress)
@@ -459,6 +565,18 @@ public partial class MainWindow : Window
             catch (Exception ex)
             {
                 await ShowMessageAsync("DXVK setup failed", ex.Message).ConfigureAwait(true);
+                return;
+            }
+        }
+        else if (LauncherBootstrap.Settings.UseDgVoodoo && !DgVoodooRuntime.IsInstalled())
+        {
+            try
+            {
+                await EnsureDgVoodooWithUiAsync().ConfigureAwait(true);
+            }
+            catch (Exception ex)
+            {
+                await ShowMessageAsync("dgVoodoo setup failed", ex.Message).ConfigureAwait(true);
                 return;
             }
         }

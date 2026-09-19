@@ -27,6 +27,8 @@ public sealed class GameLauncher(LauncherSettings settings)
         {
             var gameDirectory = Path.GetDirectoryName(executable) ?? AppContext.BaseDirectory;
             ConnectionFile.Write(gameDirectory, envSettings);
+            if (Settings.UseDgVoodoo)
+                DgVoodooRuntime.ApplyGameConfig(gameDirectory);
 
             var gameArgs = "./data";
             var startInfo = new ProcessStartInfo
