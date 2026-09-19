@@ -73,6 +73,8 @@ public partial class MainWindow : Window
                 .ConfigureAwait(true);
         }
 
+        await PromptDirectXIfMissingAsync(AppContext.BaseDirectory).ConfigureAwait(true);
+
         if (!LauncherBootstrap.Settings.CheckForUpdatesOnStartup)
             return;
         if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
@@ -320,6 +322,8 @@ public partial class MainWindow : Window
         LauncherBootstrap.Settings.UseEnhancements = EnhancementsCheckBox.IsChecked is true;
         LauncherBootstrap.Settings.Save();
 
+        await PromptDirectXIfMissingAsync(AppContext.BaseDirectory).ConfigureAwait(true);
+
         var result = _gameLauncher.TryLaunch(environment);
         if (result.Succeeded)
         {
@@ -327,6 +331,23 @@ public partial class MainWindow : Window
             return;
         }
         await ShowMessageAsync("Unable to start game", $"{result.Message}\n\n{result.Details}");
+    }
+
+    private async Task PromptDirectXIfMissingAsync(string? gameDirectory)
+    {
+        if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+            return;
+        if (DirectXDecember2006.IsInstalled(gameDirectory))
+            return;
+
+        if (
+            await ShowOkIgnoreAsync(
+                    DirectXDecember2006.DisplayName,
+                    DirectXDecember2006.MissingMessage
+                )
+                .ConfigureAwait(true)
+        )
+            DirectXDecember2006.OpenDownloadPage();
     }
 
     private async Task ShowMessageAsync(string title, string message)
@@ -364,17 +385,28 @@ public partial class MainWindow : Window
         await dialog.ShowDialog(this);
     }
 
-    private async Task<bool> ShowConfirmAsync(string title, string message)
+    private Task<bool> ShowConfirmAsync(string title, string message) =>
+        ShowChoiceAsync(title, message, acceptLabel: "Yes", cancelLabel: "No");
+
+    private Task<bool> ShowOkIgnoreAsync(string title, string message) =>
+        ShowChoiceAsync(title, message, acceptLabel: "OK", cancelLabel: "Ignore");
+
+    private async Task<bool> ShowChoiceAsync(
+        string title,
+        string message,
+        string acceptLabel,
+        string cancelLabel
+    )
     {
         var yesButton = new Button
         {
-            Content = "Yes",
+            Content = acceptLabel,
             MinWidth = 80,
             IsDefault = true,
         };
         var noButton = new Button
         {
-            Content = "No",
+            Content = cancelLabel,
             MinWidth = 80,
             IsCancel = true,
         };
