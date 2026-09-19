@@ -157,6 +157,10 @@ public partial class MainWindow : Window
     {
         Opened -= OnOpened;
 
+        await EnvironmentCatalog
+            .TryRefreshAsync(LauncherBootstrap.Settings)
+            .ConfigureAwait(true);
+
         try
         {
             await EnsureRuntimeDependenciesOnStartupAsync().ConfigureAwait(true);

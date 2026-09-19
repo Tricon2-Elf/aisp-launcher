@@ -72,33 +72,7 @@ public sealed class LauncherSettings
     public GameEnvironment SelectedEnvironment { get; set; } = GameEnvironment.Stable;
 
     public Dictionary<string, EnvironmentSettings> Environments { get; set; } =
-        new()
-        {
-            [nameof(GameEnvironment.Stable)] = new()
-            {
-                AuthHost = "aisp.moe",
-                DownloadHost = "game.aisp.moe",
-                DownloadPath = "ai-sp/download.php",
-                UploadHost = "game.aisp.moe",
-                UploadPath = "ai-sp/upload.php",
-            },
-            [nameof(GameEnvironment.Dev)] = new()
-            {
-                AuthHost = "game.aisp.moe",
-                DownloadHost = "game.aisp.moe",
-                DownloadPath = "ai-sp/download.php",
-                UploadHost = "game.aisp.moe",
-                UploadPath = "ai-sp/upload.php",
-            },
-            [nameof(GameEnvironment.Local)] = new()
-            {
-                AuthHost = "127.0.0.1",
-                DownloadHost = "127.0.0.1",
-                DownloadPath = "ai-sp/download.php",
-                UploadHost = "127.0.0.1",
-                UploadPath = "ai-sp/upload.php",
-            },
-        };
+        EnvironmentCatalog.CreateDefaults();
 
     public static string GetPath() =>
         Path.Combine(AppContext.BaseDirectory, "launcher.settings.json");
@@ -174,10 +148,13 @@ public sealed class LauncherSettings
         File.WriteAllText(path, JsonSerializer.Serialize(this, JsonOptions));
     }
 
-    public EnvironmentSettings GetEnvironment(GameEnvironment environment) =>
-        Environments.TryGetValue(environment.ToString(), out var settings)
+    public EnvironmentSettings GetEnvironment(GameEnvironment environment)
+    {
+        var fallback = Environments.TryGetValue(environment.ToString(), out var settings)
             ? settings
             : new EnvironmentSettings();
+        return EnvironmentCatalog.Resolve(environment, fallback);
+    }
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -203,4 +180,33 @@ public sealed class EnvironmentSettings
     public string UploadHost { get; set; } = "aisp.moe";
 
     public string UploadPath { get; set; } = "ai-sp/dev/upload.php";
+}
+
+internal sealed class EnvironmentSettingsOverride
+{
+    public string? AuthHost { get; set; }
+
+    public ushort? AuthPort { get; set; }
+
+    public int? BypassNicoLogin { get; set; }
+
+    public string? DownloadHost { get; set; }
+
+    public string? DownloadPath { get; set; }
+
+    public string? UploadHost { get; set; }
+
+    public string? UploadPath { get; set; }
+
+    public EnvironmentSettings Apply(EnvironmentSettings fallback) =>
+        new()
+        {
+            AuthHost = AuthHost ?? fallback.AuthHost,
+            AuthPort = AuthPort ?? fallback.AuthPort,
+            BypassNicoLogin = BypassNicoLogin ?? fallback.BypassNicoLogin,
+            DownloadHost = DownloadHost ?? fallback.DownloadHost,
+            DownloadPath = DownloadPath ?? fallback.DownloadPath,
+            UploadHost = UploadHost ?? fallback.UploadHost,
+            UploadPath = UploadPath ?? fallback.UploadPath,
+        };
 }

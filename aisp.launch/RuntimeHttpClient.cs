@@ -44,6 +44,16 @@ internal sealed class RuntimeHttpClient : IDisposable
             ?? throw new InvalidOperationException("GitHub returned an empty release payload.");
     }
 
+    public async Task<string> GetStringAsync(
+        string url,
+        CancellationToken cancellationToken = default
+    )
+    {
+        using var response = await _http.GetAsync(url, cancellationToken).ConfigureAwait(false);
+        response.EnsureSuccessStatusCode();
+        return await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+    }
+
     public async Task DownloadToFileAsync(
         string url,
         string destinationPath,
