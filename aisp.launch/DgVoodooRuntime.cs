@@ -35,7 +35,9 @@ internal static class DgVoodooRuntime
     public static bool IsInstalled() => File.Exists(CachedDllPath) && File.Exists(CplPath);
 
     public static bool NeedsDownload() =>
-        LauncherBootstrap.Settings.UseDgVoodoo && !IsInstalled();
+        LauncherBootstrap.Settings.UseEnhancements
+        && LauncherBootstrap.Settings.UseDgVoodoo
+        && !IsInstalled();
 
     public static void RemoveInstalled()
     {

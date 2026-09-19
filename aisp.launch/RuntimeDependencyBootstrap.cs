@@ -47,14 +47,14 @@ internal static class RuntimeDependencyBootstrap
             .EnsureInstalledAsync(http, status, downloadProgress, cancellationToken)
             .ConfigureAwait(false);
 
-        if (LauncherBootstrap.Settings.UseDxvk)
+        if (LauncherBootstrap.Settings.UseEnhancements && LauncherBootstrap.Settings.UseDxvk)
         {
             downloadProgress?.Report(0);
             await DxvkRuntime
                 .EnsureInstalledAsync(http, status, downloadProgress, cancellationToken)
                 .ConfigureAwait(false);
         }
-        else if (LauncherBootstrap.Settings.UseDgVoodoo)
+        else if (LauncherBootstrap.Settings.UseEnhancements && LauncherBootstrap.Settings.UseDgVoodoo)
         {
             downloadProgress?.Report(0);
             await DgVoodooRuntime

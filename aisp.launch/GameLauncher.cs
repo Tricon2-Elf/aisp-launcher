@@ -27,9 +27,9 @@ public sealed class GameLauncher(LauncherSettings settings)
         {
             var gameDirectory = Path.GetDirectoryName(executable) ?? AppContext.BaseDirectory;
             ConnectionFile.Write(gameDirectory, envSettings);
-            if (Settings.UseDgVoodoo)
+            if (Settings.UseEnhancements && Settings.UseDgVoodoo)
                 DgVoodooRuntime.ApplyGameFiles(gameDirectory);
-            else if (Settings.UseDxvk)
+            else if (Settings.UseEnhancements && Settings.UseDxvk)
                 DxvkRuntime.ApplyGameFiles(gameDirectory);
 
             var gameArgs = "./data";

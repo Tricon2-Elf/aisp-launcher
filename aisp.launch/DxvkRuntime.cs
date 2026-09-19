@@ -34,7 +34,9 @@ internal static class DxvkRuntime
     public static bool IsInstalled() => File.Exists(CachedDllPath);
 
     public static bool NeedsDownload() =>
-        LauncherBootstrap.Settings.UseDxvk && !IsInstalled();
+        LauncherBootstrap.Settings.UseEnhancements
+        && LauncherBootstrap.Settings.UseDxvk
+        && !IsInstalled();
 
     public static void RemoveInstalled() => TryDelete(GameDllPath);
 

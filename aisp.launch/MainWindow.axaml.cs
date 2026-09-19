@@ -47,7 +47,7 @@ public partial class MainWindow : Window
         UseDxvkCheckBox.IsCheckedChanged += OnOptionsChanged;
         UseDgVoodooCheckBox.IsCheckedChanged += OnOptionsChanged;
         CheckUpdatesOnStartupCheckBox.IsCheckedChanged += OnOptionsChanged;
-        UpdateElectronHwAccelEnabled();
+        UpdateEnhancementDependentOptions();
     }
 
     private async void OnOptionsChanged(object? sender, RoutedEventArgs e)
@@ -69,13 +69,13 @@ public partial class MainWindow : Window
         )
             SetCheckBoxWithoutNotify(UseDxvkCheckBox, false);
 
-        UpdateElectronHwAccelEnabled();
+        UpdateEnhancementDependentOptions();
         ApplyOptionsToSettings();
         settings.Save();
 
-        if (wasDxvk && !settings.UseDxvk)
+        if (!settings.UseEnhancements || (wasDxvk && !settings.UseDxvk))
             DxvkRuntime.RemoveInstalled();
-        if (wasDgVoodoo && !settings.UseDgVoodoo)
+        if (!settings.UseEnhancements || (wasDgVoodoo && !settings.UseDgVoodoo))
             DgVoodooRuntime.RemoveInstalled();
 
         if (settings.UseDxvk && !wasDxvk)
@@ -115,8 +115,13 @@ public partial class MainWindow : Window
         box.IsCheckedChanged += OnOptionsChanged;
     }
 
-    private void UpdateElectronHwAccelEnabled() =>
-        ElectronHwAccelCheckBox.IsEnabled = EnhancementsCheckBox.IsChecked is true;
+    private void UpdateEnhancementDependentOptions()
+    {
+        var enabled = EnhancementsCheckBox.IsChecked is true;
+        ElectronHwAccelCheckBox.IsEnabled = enabled;
+        UseDxvkCheckBox.IsEnabled = enabled;
+        UseDgVoodooCheckBox.IsEnabled = enabled;
+    }
 
     private void ApplyOptionsToSettings()
     {
@@ -556,7 +561,11 @@ public partial class MainWindow : Window
         ApplyOptionsToSettings();
         LauncherBootstrap.Settings.Save();
 
-        if (LauncherBootstrap.Settings.UseDxvk && !DxvkRuntime.IsInstalled())
+        if (
+            LauncherBootstrap.Settings.UseEnhancements
+            && LauncherBootstrap.Settings.UseDxvk
+            && !DxvkRuntime.IsInstalled()
+        )
         {
             try
             {
@@ -568,7 +577,11 @@ public partial class MainWindow : Window
                 return;
             }
         }
-        else if (LauncherBootstrap.Settings.UseDgVoodoo && !DgVoodooRuntime.IsInstalled())
+        else if (
+            LauncherBootstrap.Settings.UseEnhancements
+            && LauncherBootstrap.Settings.UseDgVoodoo
+            && !DgVoodooRuntime.IsInstalled()
+        )
         {
             try
             {
