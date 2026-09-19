@@ -16,7 +16,8 @@ internal static class RuntimeDependencyBootstrap
         {
             return !ElectronRuntime.IsPinnedVersionInstalled()
                 || MediaToolsResolver.TryFindExisting() is null
-                || MediaToolsResolver.TryFindYtdlp() is null;
+                || MediaToolsResolver.TryFindYtdlp() is null
+                || DxvkRuntime.NeedsDownload();
         }
         catch (PlatformNotSupportedException)
         {
@@ -44,6 +45,14 @@ internal static class RuntimeDependencyBootstrap
         var media = await MediaToolsResolver
             .EnsureInstalledAsync(http, status, downloadProgress, cancellationToken)
             .ConfigureAwait(false);
+
+        if (LauncherBootstrap.Settings.UseDxvk)
+        {
+            downloadProgress?.Report(0);
+            await DxvkRuntime
+                .EnsureInstalledAsync(http, status, downloadProgress, cancellationToken)
+                .ConfigureAwait(false);
+        }
 
         var result = new RuntimeDependencies
         {

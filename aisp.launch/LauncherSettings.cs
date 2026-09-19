@@ -56,6 +56,12 @@ public sealed class LauncherSettings
     /// </summary>
     public bool ElectronHardwareAcceleration { get; set; } = !WineDetection.IsRunningOnWine;
 
+    /// <summary>
+    /// When true, the launcher installs the latest DXVK 32-bit d3d9.dll next to the game
+    /// so the client renders through Vulkan.
+    /// </summary>
+    public bool UseDxvk { get; set; }
+
     public GameEnvironment SelectedEnvironment { get; set; } = GameEnvironment.Stable;
 
     public Dictionary<string, EnvironmentSettings> Environments { get; set; } =
@@ -104,7 +110,8 @@ public sealed class LauncherSettings
         var settings = JsonSerializer.Deserialize<LauncherSettings>(json, JsonOptions)
             ?? new LauncherSettings();
         if (!string.Equals(settings.Version, LaunchVersion.Display, StringComparison.Ordinal)
-            || !FileHasProperty(json, "electronHardwareAcceleration"))
+            || !FileHasProperty(json, "electronHardwareAcceleration")
+            || !FileHasProperty(json, "useDxvk"))
         {
             settings.Version = LaunchVersion.Display;
             settings.Save(path);

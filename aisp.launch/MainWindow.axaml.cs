@@ -38,19 +38,47 @@ public partial class MainWindow : Window
         var settings = LauncherBootstrap.Settings;
         EnhancementsCheckBox.IsChecked = settings.UseEnhancements;
         ElectronHwAccelCheckBox.IsChecked = settings.ElectronHardwareAcceleration;
+        UseDxvkCheckBox.IsChecked = settings.UseDxvk;
         CheckUpdatesOnStartupCheckBox.IsChecked = settings.CheckForUpdatesOnStartup;
 
         EnhancementsCheckBox.IsCheckedChanged += OnOptionsChanged;
         ElectronHwAccelCheckBox.IsCheckedChanged += OnOptionsChanged;
+        UseDxvkCheckBox.IsCheckedChanged += OnOptionsChanged;
         CheckUpdatesOnStartupCheckBox.IsCheckedChanged += OnOptionsChanged;
         UpdateElectronHwAccelEnabled();
     }
 
-    private void OnOptionsChanged(object? sender, RoutedEventArgs e)
+    private async void OnOptionsChanged(object? sender, RoutedEventArgs e)
     {
+        var settings = LauncherBootstrap.Settings;
+        var wasDxvk = settings.UseDxvk;
         UpdateElectronHwAccelEnabled();
         ApplyOptionsToSettings();
-        LauncherBootstrap.Settings.Save();
+        settings.Save();
+
+        if (settings.UseDxvk == wasDxvk)
+            return;
+
+        if (settings.UseDxvk)
+        {
+            try
+            {
+                await EnsureDxvkWithUiAsync().ConfigureAwait(true);
+            }
+            catch (Exception ex)
+            {
+                UseDxvkCheckBox.IsCheckedChanged -= OnOptionsChanged;
+                UseDxvkCheckBox.IsChecked = false;
+                UseDxvkCheckBox.IsCheckedChanged += OnOptionsChanged;
+                settings.UseDxvk = false;
+                settings.Save();
+                await ShowMessageAsync("DXVK setup failed", ex.Message).ConfigureAwait(true);
+            }
+
+            return;
+        }
+
+        DxvkRuntime.RemoveInstalled();
     }
 
     private void UpdateElectronHwAccelEnabled() =>
@@ -61,6 +89,7 @@ public partial class MainWindow : Window
         var settings = LauncherBootstrap.Settings;
         settings.UseEnhancements = EnhancementsCheckBox.IsChecked is true;
         settings.ElectronHardwareAcceleration = ElectronHwAccelCheckBox.IsChecked is true;
+        settings.UseDxvk = UseDxvkCheckBox.IsChecked is true;
         settings.CheckForUpdatesOnStartup = CheckUpdatesOnStartupCheckBox.IsChecked is true;
     }
 
@@ -196,6 +225,77 @@ public partial class MainWindow : Window
             }
 
             throw;
+        }
+    }
+
+    private async Task EnsureDxvkWithUiAsync()
+    {
+        if (DxvkRuntime.IsInstalled())
+            return;
+
+        var statusText = new TextBlock
+        {
+            Text = "Checking latest DXVK release…",
+            TextWrapping = Avalonia.Media.TextWrapping.Wrap,
+        };
+        var progressBar = new ProgressBar
+        {
+            Minimum = 0,
+            Maximum = 100,
+            Value = 0,
+            Height = 8,
+        };
+        var dialog = new Window
+        {
+            Title = "Downloading DXVK",
+            Width = 420,
+            SizeToContent = SizeToContent.Height,
+            CanResize = false,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner,
+            Content = new StackPanel
+            {
+                Margin = new Thickness(20),
+                Spacing = 16,
+                Children = { statusText, progressBar },
+            },
+        };
+
+        var status = new Progress<string>(message => statusText.Text = message);
+        var downloadProgress = new Progress<double>(fraction =>
+        {
+            progressBar.Value = Math.Clamp(fraction * 100, 0, 100);
+        });
+
+        StartGameButton.IsEnabled = false;
+        OptionsButton.IsEnabled = false;
+        using var http = new RuntimeHttpClient();
+        var ensureTask = DxvkRuntime.EnsureInstalledAsync(http, status, downloadProgress);
+        var dialogTask = dialog.ShowDialog(this);
+
+        try
+        {
+            await ensureTask.ConfigureAwait(true);
+            dialog.Close();
+            await dialogTask.ConfigureAwait(true);
+        }
+        catch
+        {
+            dialog.Close();
+            try
+            {
+                await dialogTask.ConfigureAwait(true);
+            }
+            catch
+            {
+                // Dialog may already be closed.
+            }
+
+            throw;
+        }
+        finally
+        {
+            StartGameButton.IsEnabled = !_updateInProgress;
+            OptionsButton.IsEnabled = true;
         }
     }
 
@@ -349,6 +449,19 @@ public partial class MainWindow : Window
         LauncherBootstrap.Settings.SelectedEnvironment = environment;
         ApplyOptionsToSettings();
         LauncherBootstrap.Settings.Save();
+
+        if (LauncherBootstrap.Settings.UseDxvk && !DxvkRuntime.IsInstalled())
+        {
+            try
+            {
+                await EnsureDxvkWithUiAsync().ConfigureAwait(true);
+            }
+            catch (Exception ex)
+            {
+                await ShowMessageAsync("DXVK setup failed", ex.Message).ConfigureAwait(true);
+                return;
+            }
+        }
 
         await PromptDirectXIfMissingAsync(AppContext.BaseDirectory).ConfigureAwait(true);
 

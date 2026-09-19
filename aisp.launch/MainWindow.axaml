@@ -40,6 +40,8 @@
                                           Content="Use Enhancements" />
                                 <CheckBox x:Name="ElectronHwAccelCheckBox"
                                           Content="Electron HW Acceleration" />
+                                <CheckBox x:Name="UseDxvkCheckBox"
+                                          Content="Use Vulkan (Uses DXVK)" />
                                 <CheckBox x:Name="CheckUpdatesOnStartupCheckBox"
                                           Content="Check for updates on startup" />
                             </StackPanel>
