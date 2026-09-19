@@ -57,16 +57,15 @@ public sealed class LauncherSettings
     public bool ElectronHardwareAcceleration { get; set; } = !WineDetection.IsRunningOnWine;
 
     /// <summary>
-    /// When true, the launcher installs the latest DXVK 32-bit d3d9.dll next to the game
-    /// so the client renders through Vulkan.
+    /// When true, the launcher keeps the latest DXVK 32-bit d3d9.dll under
+    /// aisp.launch.data/dxvk and copies it next to the game on launch.
     /// </summary>
     public bool UseDxvk { get; set; }
 
     /// <summary>
-    /// When true, the launcher installs pinned dgVoodoo2 (v2.87.5) MS/x86 D3D9.dll
-    /// next to the game, plus dgVoodooCpl.exe and dgVoodoo.conf under aisp.launch.data.
-    /// The managed config is copied into the game directory on each launch.
-    /// Mutually exclusive with UseDxvk.
+    /// When true, the launcher keeps pinned dgVoodoo2 (v2.87.5) under
+    /// aisp.launch.data/dgVoodoo and copies D3D9.dll plus dgVoodoo.conf next to
+    /// the game on each launch. Mutually exclusive with UseDxvk.
     /// </summary>
     public bool UseDgVoodoo { get; set; }
 

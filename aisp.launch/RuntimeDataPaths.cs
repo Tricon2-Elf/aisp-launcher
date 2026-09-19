@@ -7,11 +7,17 @@ internal static class RuntimeDataPaths
     public const string DataDirectoryName = "aisp.launch.data";
     public const string ElectronDirectoryName = "electron";
     public const string MediaDirectoryName = "media";
+    public const string DxvkDirectoryName = "dxvk";
+    public const string DgVoodooDirectoryName = "dgVoodoo";
 
     public static string InstallDirectory =>
         Path.GetDirectoryName(Environment.ProcessPath) ?? AppContext.BaseDirectory;
 
     public static string DataRoot => Path.Combine(InstallDirectory, DataDirectoryName);
+
+    public static string DxvkDirectory => Path.Combine(DataRoot, DxvkDirectoryName);
+
+    public static string DgVoodooDirectory => Path.Combine(DataRoot, DgVoodooDirectoryName);
 
     // Wine uses a native Linux Electron the hook execs itself, not electron.exe in the prefix.
     public static string ElectronDirectory =>

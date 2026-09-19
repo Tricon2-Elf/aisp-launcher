@@ -22,48 +22,40 @@ internal static class DgVoodooRuntime
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled
     );
 
-    public static string DllPath =>
-        Path.Combine(RuntimeDataPaths.InstallDirectory, DllFileName);
+    public static string CacheDirectory => RuntimeDataPaths.DgVoodooDirectory;
 
-    public static string ManagedConfigPath =>
-        Path.Combine(RuntimeDataPaths.DataRoot, ConfigFileName);
+    public static string CachedDllPath => Path.Combine(CacheDirectory, DllFileName);
 
-    public static string CplPath =>
-        Path.Combine(RuntimeDataPaths.DataRoot, CplFileName);
+    public static string ManagedConfigPath => Path.Combine(CacheDirectory, ConfigFileName);
 
-    public static string VersionStampPath =>
-        Path.Combine(RuntimeDataPaths.DataRoot, VersionStampName);
+    public static string CplPath => Path.Combine(CacheDirectory, CplFileName);
 
-    public static bool IsInstalled() =>
-        File.Exists(DllPath)
-        && File.Exists(CplPath)
-        && File.Exists(VersionStampPath)
-        && string.Equals(
-            TryReadInstalledVersion(),
-            Version,
-            StringComparison.OrdinalIgnoreCase
-        );
+    public static string VersionStampPath => Path.Combine(CacheDirectory, VersionStampName);
+
+    public static bool IsInstalled() => File.Exists(CachedDllPath) && File.Exists(CplPath);
 
     public static bool NeedsDownload() =>
         LauncherBootstrap.Settings.UseDgVoodoo && !IsInstalled();
 
     public static void RemoveInstalled()
     {
-        if (!File.Exists(VersionStampPath))
-            return;
-
-        TryDelete(DllPath);
+        TryDelete(Path.Combine(RuntimeDataPaths.InstallDirectory, DllFileName));
         TryDelete(Path.Combine(RuntimeDataPaths.InstallDirectory, ConfigFileName));
-        TryDelete(VersionStampPath);
     }
 
     /// <summary>
-    /// Copies the player-edited config from aisp.launch.data into the game directory
-    /// so D3D9.dll picks it up. Writes the embedded default only if the managed file
-    /// is missing (an existing game-directory config is migrated first).
+    /// Copies the cached D3D9.dll and player-edited config into the game directory.
+    /// Writes the embedded default only if the managed file is missing.
     /// </summary>
-    public static void ApplyGameConfig(string gameDirectory)
+    public static void ApplyGameFiles(string gameDirectory)
     {
+        if (!File.Exists(CachedDllPath))
+        {
+            throw new InvalidOperationException(
+                $"dgVoodoo D3D9.dll was not found at '{CachedDllPath}'."
+            );
+        }
+
         EnsureManagedConfig();
         if (!File.Exists(ManagedConfigPath))
         {
@@ -73,6 +65,7 @@ internal static class DgVoodooRuntime
         }
 
         Directory.CreateDirectory(gameDirectory);
+        File.Copy(CachedDllPath, Path.Combine(gameDirectory, DllFileName), overwrite: true);
         File.Copy(
             ManagedConfigPath,
             Path.Combine(gameDirectory, ConfigFileName),
@@ -90,6 +83,8 @@ internal static class DgVoodooRuntime
         if (IsInstalled())
         {
             EnsureManagedConfig();
+            if (!File.Exists(VersionStampPath))
+                File.WriteAllText(VersionStampPath, Version);
             status?.Report("dgVoodoo already installed.");
             return;
         }
@@ -139,8 +134,8 @@ internal static class DgVoodooRuntime
             status?.Report("Installing dgVoodoo D3D9.dll…");
             ExtractZipFiles(archivePath, extractedDll, extractedCpl);
 
-            Directory.CreateDirectory(RuntimeDataPaths.DataRoot);
-            File.Copy(extractedDll, DllPath, overwrite: true);
+            Directory.CreateDirectory(CacheDirectory);
+            File.Copy(extractedDll, CachedDllPath, overwrite: true);
             File.Copy(extractedCpl, CplPath, overwrite: true);
             EnsureManagedConfig();
             File.WriteAllText(VersionStampPath, Version);
@@ -148,7 +143,7 @@ internal static class DgVoodooRuntime
             if (!IsInstalled())
             {
                 throw new InvalidOperationException(
-                    $"dgVoodoo installation incomplete: expected {DllPath} and {CplPath}."
+                    $"dgVoodoo installation incomplete: expected {CachedDllPath} and {CplPath}."
                 );
             }
 
@@ -240,17 +235,7 @@ internal static class DgVoodooRuntime
 
     private static void EnsureManagedConfig()
     {
-        if (File.Exists(ManagedConfigPath))
-            return;
-
-        Directory.CreateDirectory(RuntimeDataPaths.DataRoot);
-        var gameConfig = Path.Combine(RuntimeDataPaths.InstallDirectory, ConfigFileName);
-        if (File.Exists(gameConfig))
-        {
-            File.Copy(gameConfig, ManagedConfigPath);
-            return;
-        }
-
+        Directory.CreateDirectory(CacheDirectory);
         WriteEmbeddedConfigIfMissing(ManagedConfigPath);
     }
 
@@ -272,21 +257,6 @@ internal static class DgVoodooRuntime
             FileShare.None
         );
         stream.CopyTo(output);
-    }
-
-    private static string? TryReadInstalledVersion()
-    {
-        if (!File.Exists(VersionStampPath))
-            return null;
-        try
-        {
-            var text = File.ReadAllText(VersionStampPath).Trim();
-            return text.Length > 0 ? text : null;
-        }
-        catch
-        {
-            return null;
-        }
     }
 
     private static void TryDelete(string path)

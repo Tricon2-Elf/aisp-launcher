@@ -22,24 +22,33 @@ internal static class DxvkRuntime
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled
     );
 
-    public static string DllPath =>
+    public static string CacheDirectory => RuntimeDataPaths.DxvkDirectory;
+
+    public static string CachedDllPath => Path.Combine(CacheDirectory, DllFileName);
+
+    public static string VersionStampPath => Path.Combine(CacheDirectory, VersionStampName);
+
+    public static string GameDllPath =>
         Path.Combine(RuntimeDataPaths.InstallDirectory, DllFileName);
 
-    public static string VersionStampPath =>
-        Path.Combine(RuntimeDataPaths.DataRoot, VersionStampName);
-
-    public static bool IsInstalled() => File.Exists(DllPath) && File.Exists(VersionStampPath);
+    public static bool IsInstalled() => File.Exists(CachedDllPath);
 
     public static bool NeedsDownload() =>
         LauncherBootstrap.Settings.UseDxvk && !IsInstalled();
 
-    public static void RemoveInstalled()
-    {
-        if (!File.Exists(VersionStampPath))
-            return;
+    public static void RemoveInstalled() => TryDelete(GameDllPath);
 
-        TryDelete(DllPath);
-        TryDelete(VersionStampPath);
+    public static void ApplyGameFiles(string gameDirectory)
+    {
+        if (!File.Exists(CachedDllPath))
+        {
+            throw new InvalidOperationException(
+                $"DXVK d3d9.dll was not found at '{CachedDllPath}'."
+            );
+        }
+
+        Directory.CreateDirectory(gameDirectory);
+        File.Copy(CachedDllPath, Path.Combine(gameDirectory, DllFileName), overwrite: true);
     }
 
     public static async Task EnsureInstalledAsync(
@@ -103,14 +112,14 @@ internal static class DxvkRuntime
             await ExtractX32D3d9Async(archivePath, extractedDll, cancellationToken)
                 .ConfigureAwait(false);
 
-            Directory.CreateDirectory(RuntimeDataPaths.DataRoot);
-            File.Copy(extractedDll, DllPath, overwrite: true);
+            Directory.CreateDirectory(CacheDirectory);
+            File.Copy(extractedDll, CachedDllPath, overwrite: true);
             File.WriteAllText(VersionStampPath, tag);
 
             if (!IsInstalled())
             {
                 throw new InvalidOperationException(
-                    $"DXVK installation incomplete: expected {DllPath}."
+                    $"DXVK installation incomplete: expected {CachedDllPath}."
                 );
             }
 
