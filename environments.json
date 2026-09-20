@@ -1,4 +1,13 @@
 {
+  "stable": {
+    "authHost": "eu.aisp.moe",
+    "authPort": 50050,
+    "bypassNicoLogin": 1,
+    "downloadHost": "game.eu.aisp.moe",
+    "downloadPath": "ai-sp/download.php",
+    "uploadHost": "game.eu.aisp.moe",
+    "uploadPath": "ai-sp/upload.php"
+  }
   "europe": {
     "authHost": "eu.aisp.moe",
     "authPort": 50050,
