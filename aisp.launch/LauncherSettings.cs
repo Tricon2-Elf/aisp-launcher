@@ -90,7 +90,6 @@ public sealed class LauncherSettings
         var json = File.ReadAllText(path);
         var settings = JsonSerializer.Deserialize<LauncherSettings>(json, JsonOptions)
             ?? new LauncherSettings();
-        EnvironmentCatalog.RetainOfficialKeys(settings);
         if (!string.Equals(settings.Version, LaunchVersion.Display, StringComparison.Ordinal)
             || !FileHasProperty(json, "electronHardwareAcceleration")
             || !FileHasProperty(json, "useDxvk")

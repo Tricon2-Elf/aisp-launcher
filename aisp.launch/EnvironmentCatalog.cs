@@ -42,9 +42,9 @@ internal static class EnvironmentCatalog
             if (string.IsNullOrWhiteSpace(repo) || !repo.Contains('/'))
                 return false;
 
-            var url = $"https://raw.githubusercontent.com/{repo}/HEAD/{FileName}";
             using var http = new RuntimeHttpClient();
-            var json = await http.GetStringAsync(url, cancellationToken).ConfigureAwait(false);
+            var json = await FetchRepoFileAsync(http, repo, cancellationToken)
+                .ConfigureAwait(false);
             var parsed = Parse(json);
             if (parsed is null || parsed.Count == 0)
                 return false;
@@ -57,20 +57,6 @@ internal static class EnvironmentCatalog
         {
             return false;
         }
-    }
-
-    public static void RetainOfficialKeys(LauncherSettings settings)
-    {
-        var official = CreateDefaults();
-        var next = NewMap();
-        foreach (var (key, value) in official)
-        {
-            next[key] = settings.Environments.TryGetValue(key, out var cached)
-                ? cached
-                : value;
-        }
-
-        settings.Environments = next;
     }
 
     public static IReadOnlyList<string> ListVisible(LauncherSettings settings)
@@ -109,6 +95,41 @@ internal static class EnvironmentCatalog
             return overlay.Apply(fallback);
 
         return fallback;
+    }
+
+    private static async Task<string> FetchRepoFileAsync(
+        RuntimeHttpClient http,
+        string repo,
+        CancellationToken cancellationToken
+    )
+    {
+        var apiUrl = $"https://api.github.com/repos/{repo}/contents/{FileName}";
+        var payload = await http.GetStringAsync(apiUrl, cancellationToken).ConfigureAwait(false);
+        using var doc = JsonDocument.Parse(payload);
+        var root = doc.RootElement;
+
+        if (
+            root.TryGetProperty("encoding", out var encoding)
+            && encoding.ValueKind == JsonValueKind.String
+            && encoding.GetString() is "base64"
+            && root.TryGetProperty("content", out var content)
+            && content.ValueKind == JsonValueKind.String
+            && content.GetString() is { Length: > 0 } base64
+        )
+        {
+            var compact = base64.Replace("\n", "", StringComparison.Ordinal);
+            return System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(compact));
+        }
+
+        if (
+            root.TryGetProperty("download_url", out var download)
+            && download.GetString() is { Length: > 0 } downloadUrl
+        )
+        {
+            return await http.GetStringAsync(downloadUrl, cancellationToken).ConfigureAwait(false);
+        }
+
+        throw new InvalidOperationException($"GitHub did not return {FileName}.");
     }
 
     internal static Dictionary<string, EnvironmentSettings>? Parse(string json)
